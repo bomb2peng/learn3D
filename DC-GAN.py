@@ -15,7 +15,7 @@ def str2bool(v):
     return v.lower() in ('true')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainD]')
+parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainD, testD]')
 parser.add_argument('--data_dir', type=str, default='/hd2/pengbo/StarGAN/data/CelebA_nocrop/', help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
 parser.add_argument('--n_epochs', type=int, default=30, help='number of epochs of training')
@@ -61,7 +61,7 @@ if opt.use_tensorboard:
     from logger import Logger
     logger = Logger(opt.log_dir)
 
-if opt.mode =='trainGAN':
+if opt.mode is 'trainGAN':
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
@@ -167,7 +167,8 @@ if opt.mode =='trainGAN':
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
 
-elif opt.mode == 'trainD':
+elif opt.mode is 'trainD':
+    print('start trainD...')
     generator = M.DCGAN_Generator(opt.img_size, opt.channels, opt.latent_dim)
     discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels)
     BCEloss = torch.nn.BCELoss()
@@ -252,3 +253,58 @@ elif opt.mode == 'trainD':
             for param_group in optimizer_D.param_groups:
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
+elif opt.mode is 'testD':
+    print('doing testD')
+    discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels)
+    if cuda:
+        discriminator.cuda()
+
+    # initialize D with trained weights
+    discriminator.load_state_dict(torch.load(opt.load_D))
+
+    # make dataloader
+    transform0 = T.Compose([T.Resize(opt.img_size),
+                            T.ToTensor(),
+                            T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+    GAN_data_test = data_loader.ImageFolderSingle(opt.dir_generated, 0.5, 'test', transform0, 0)
+
+    transform1 = T.Compose([T.CenterCrop(opt.crop_size),
+                            T.Resize(opt.img_size),
+                            T.ToTensor(),
+                            T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+    CelebA_data_test = data_loader.ImageFolderSingle(os.path.join(opt.data_dir, 'images'), 0.5, 'test', transform1, 1)
+    print(len(GAN_data_test))
+    print(len(CelebA_data_test))
+
+    mixed_data_test = data.ConcatDataset([GAN_data_test, CelebA_data_test])
+    mixed_loader_test = data.DataLoader(mixed_data_test, batch_size=opt.batch_size, shuffle=True,
+                                         num_workers=opt.n_cpu)
+    # ----------
+    #  Testing
+    # ----------
+    last_iter = opt.n_epochs * len(mixed_loader_test)
+    num_correct = 0
+    for epoch in range(opt.n_epochs):
+        for i, (imgs, labels) in enumerate(mixed_loader_test):
+            # Configure input
+            imgs = Variable(imgs.type(Tensor))
+            labels = Variable(labels.type(Tensor))
+
+            predicts = discriminator(imgs)
+            labels_cpu = torch.squeeze(labels.cpu())
+            predicts_cpu = torch.squeeze(predicts.cpu())
+            pred_labels = torch.zeros_like(labels_cpu)
+            pred_labels[predicts_cpu > 0.5] = 1
+            acc = torch.sum(pred_labels == labels_cpu).float() / len(labels_cpu)
+            num_correct = num_correct + torch.sum(pred_labels == labels_cpu).float()
+
+            batches_done = epoch * len(mixed_loader_test) + i + 1
+            if batches_done % opt.log_step == 0 or batches_done == last_iter:
+                t_now = time.time()
+                t_elapse = t_now - t_start
+                t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
+                print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [Batch Accuracy: %f]"
+                      % (t_elapse, epoch, opt.n_epochs, i, len(mixed_loader_test), acc))
+
+    test_acc = num_correct/len(mixed_data_test)
+    print('Total accuracy on %d test images is %f' % (len(mixed_data_test, test_acc)))

@@ -70,7 +70,7 @@ class ImageFolderSingle(data.Dataset):
         elif self.mode is 'test':
             return N-int(np.ceil(N*self.train_perc))
         else:
-            exit('GAN_data mode must be one of [train test]')
+            exit('ImageFolderSingle mode must be one of [train test]')
 
     def __getitem__(self, index):
         N = len(self.img_paths)
