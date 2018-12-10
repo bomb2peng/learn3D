@@ -29,7 +29,7 @@ def get_CelebA_loader(data_dir, img_size, crop_size, batch_size, n_cpu):
     return CelebA_loader
 
 
-def generate(G, N, data_dir, cuda, batch_size, latent_dim):
+def generate(G, N, data_dir, cuda, batch_size, latent_dim, device):
     # this function generate a dataset using given G network
     if os.path.isdir(data_dir):
         print('GAN image dataset already exists in {}'.format(data_dir))
@@ -39,7 +39,7 @@ def generate(G, N, data_dir, cuda, batch_size, latent_dim):
         Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
         k = 0
         for i in range(int(np.ceil(N/batch_size))):
-            z = Tensor(np.random.normal(0, 1, (batch_size, latent_dim)))
+            z = Tensor(np.random.normal(0, 1, (batch_size, latent_dim)), device=device)
             imgs = G(z)
             for j in range(batch_size):
                 save_image(torch.squeeze(imgs[j,]), os.path.join(data_dir, '%06d.jpg' % k), nrow=1, padding=0,
