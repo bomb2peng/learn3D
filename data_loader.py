@@ -62,6 +62,8 @@ class ImageFolderSingle(data.Dataset):
         self.img_paths = []
         for f in glob.glob(os.path.join(data_dir, '*.jpg')):
             self.img_paths.append(f)
+        for f in glob.glob(os.path.join(data_dir, '*.png')):
+            self.img_paths.append(f)
 
     def __len__(self):
         N = len(self.img_paths)

@@ -49,11 +49,12 @@ parser.add_argument('--dir_generated', type=str, default=None, help='saving dir 
 parser.add_argument('--train_perc', type=float, default=0.5, help='percentage of training split')
 parser.add_argument('--device_id', type=int, default=0, help='choose device ID')
 parser.add_argument('--n_iters', type=int, default=3000, help='number of iterations for training')
-parser.add_argument('--model', type=str, default='DCGAN', help='choose GAN model, can be [DCGAN, WGAN...]')
+parser.add_argument('--model', type=str, default='DCGAN', help='choose GAN model, can be [DCGAN, WGAN, WGAN-GP...]')
 parser.add_argument('--G_every', type=int, default=1, help='G:D training schedule is 1:G_every')
 parser.add_argument('--clip_value', type=float, default=0.01, help='clip value for D weights in WGAN trainings')
 parser.add_argument('--batches_done', type=int, default=0, help='previous batches_done when '
                                                                 'loading ckpt and continue traning')
+parser.add_argument('--gp', type=float, default=10.0, help='gradient penalty for WGAN-GP')
 
 t_start = time.time()
 opt = parser.parse_args()
@@ -66,6 +67,21 @@ def weights_init_normal(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
         torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+
+def gradient_penalty(x, y, f):
+    # interpolation
+    shape = [x.size(0)] + [1] * (x.dim() - 1)
+    alpha = torch.rand(shape, device=device)
+    z = x + alpha * (y - x)
+
+    # gradient penalty
+    z = Variable(z, requires_grad=True)
+    o = f(z)
+    g = torch.autograd.grad(o, z, grad_outputs=torch.ones(o.size(), device=device),
+                            create_graph=True, retain_graph=True)[0].view(z.size(0), -1)
+    gp = ((g.norm(p=2, dim=1) - 1)**2).mean()
+
+    return gp
 
 if opt.use_tensorboard:
     os.makedirs(opt.log_dir, exist_ok=True)
@@ -106,7 +122,7 @@ if opt.mode == 'trainGAN':
                                          num_workers=opt.n_cpu)
 
     # Optimizers
-    if opt.model == 'DCGAN':
+    if opt.model in ('DCGAN', 'WGAN-GP'):
         optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
         optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
     elif opt.model == 'WGAN':
@@ -136,7 +152,7 @@ if opt.mode == 'trainGAN':
             #  Train Discriminator
             # ---------------------
 
-            optimizer_D.zero_grad()
+            # optimizer_D.zero_grad()
 
             # Sample random noise as generator input
             z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim)), device=device))
@@ -148,19 +164,29 @@ if opt.mode == 'trainGAN':
             if opt.model == 'DCGAN':
                 real_loss = F.binary_cross_entropy(discriminator(real_imgs), valid)
                 fake_loss = F.binary_cross_entropy(discriminator(gen_imgs), fake)
-            elif opt.model == 'WGAN':
+            elif opt.model in ('WGAN', 'WGAN-GP'):
                 real_loss = -torch.mean(discriminator(real_imgs))
                 fake_loss = torch.mean(discriminator(gen_imgs))
 
             if opt.model == 'DCGAN':
                 d_loss = (real_loss + fake_loss) / 2
+                losses['D/loss_real'] = real_loss.item()
+                losses['D/loss_fake'] = fake_loss.item()
+                losses['D/loss_mean'] = d_loss.item()
             elif opt.model == 'WGAN':
                 d_loss = real_loss+fake_loss
+                losses['D/logit_real'] = -real_loss.item()
+                losses['D/logit_fake'] = fake_loss.item()
+                losses['D/Wasserstain-D'] = -d_loss.item()
+            elif opt.model == 'WGAN-GP':
+                gp = gradient_penalty(real_imgs.data, gen_imgs.data, discriminator)
+                d_loss = real_loss + fake_loss + opt.gp*gp
+                losses['D/logit_real'] = -real_loss.item()
+                losses['D/logit_fake'] = fake_loss.item()
+                losses['D/Wasserstain-D'] = -(real_loss + fake_loss).item()
+                losses['D/gp'] = opt.gp*gp
 
-            losses['D/loss_real'] = real_loss.item()
-            losses['D/loss_fake'] = fake_loss.item()
-            losses['D/loss_mean'] = d_loss.item()
-
+            discriminator.zero_grad()
             d_loss.backward()
             optimizer_D.step()
 
@@ -174,16 +200,18 @@ if opt.mode == 'trainGAN':
             # -----------------
             if (epoch * len(dataloader) + i + 1) % opt.G_every == 0:
 
-                optimizer_G.zero_grad()
+                # optimizer_G.zero_grad()
                 gen_imgs = generator(z)
                 # Loss measures generator's ability to fool the discriminator
                 if opt.model == 'DCGAN':
                     g_loss = F.binary_cross_entropy(discriminator(gen_imgs), valid)
-                elif opt.model == 'WGAN':
+                    losses['G/loss_fake'] = g_loss.item()
+                elif opt.model in ('WGAN', 'WGAN-GP'):
                     g_loss = -torch.mean(discriminator(gen_imgs))
+                    losses['G/logit_fake'] = -g_loss.item()
 
-                losses['G/loss_fake'] = g_loss.item()
-
+                discriminator.zero_grad()
+                generator.zero_grad()
                 g_loss.backward()
                 optimizer_G.step()
 
@@ -292,7 +320,7 @@ elif opt.mode == 'trainD':
                 t_elapse = t_now - t_start
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [D loss: %f] [Accuracy: %f]"
-                      % (t_elapse, epoch, opt.n_epochs, i, len(mixed_loader_train), loss.item(), acc))
+                      % (t_elapse, epoch+1, opt.n_epochs, i+1, len(mixed_loader_train), loss.item(), acc))
                 if opt.use_tensorboard:
                     for tag, value in losses.items():
                         logger.scalar_summary(tag, value, batches_done)
