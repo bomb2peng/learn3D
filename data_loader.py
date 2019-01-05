@@ -7,6 +7,10 @@ from torchvision.utils import  save_image
 import os
 import glob
 from PIL import Image
+import cv2
+import random
+global i
+i = 0
 
 def rescale(x):
     # rescale image to [-1, 1]
@@ -14,6 +18,26 @@ def rescale(x):
     x = (x-x.min())/range*2-1
     return x
 
+def simple_blur(x):
+    # Simple Blurring
+    # global i
+    #list = [1, 3, 5]
+    #ksize = random.sample(list, 1)
+    img1 = cv2.cvtColor(np.asarray(x), cv2.COLOR_RGB2BGR)
+    bl = cv2.blur(img1, (ksize[0], ksize[0]))
+    img2 = Image.fromarray(cv2.cvtColor(bl, cv2.COLOR_BGR2RGB))
+    # img2.save('/hd1/xuanxinsheng/result/xxs/img/%05d.png' % i)
+    # i = i+1
+    return img2
+
+def gaussian_blur(x):
+    list = [3, 5, 7]
+    ksize = random.sample(list, 1)
+    kernel_size = (ksize[0], ksize[0])
+    img1 = cv2.cvtColor(np.asarray(x), cv2.COLOR_RGB2BGR)
+    bl = cv2.GaussianBlur(img1, kernel_size, 0)
+    img2 = Image.fromarray(cv2.cvtColor(bl, cv2.COLOR_BGR2RGB))
+    return img2
 
 def get_CelebA_loader(data_dir, img_size, crop_size, batch_size, n_cpu):
     transform = []
@@ -42,7 +66,7 @@ def generate(G, N, data_dir, cuda, batch_size, latent_dim, device):
             z = Tensor(np.random.normal(0, 1, (batch_size, latent_dim)), device=device)
             imgs = G(z)
             for j in range(batch_size):
-                save_image(torch.squeeze(imgs[j,]), os.path.join(data_dir, '%06d.jpg' % k), nrow=1, padding=0,
+                save_image(torch.squeeze(imgs[j,]), os.path.join(data_dir, '%06d.png' % k), nrow=1, padding=0,
                            normalize=True)
                 k = k+1
                 if k%1000 == 0:

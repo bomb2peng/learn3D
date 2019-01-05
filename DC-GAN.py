@@ -11,17 +11,22 @@ import data_loader
 import torchvision.transforms as T
 import torch.utils.data as data
 import torch.nn.functional as F
+import os
+import torch.nn as nn
+import cv2
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
 
 def str2bool(v):
     return v.lower() in ('true')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainD, testD, trainG]')
-parser.add_argument('--data_dir', type=str, default='/hd2/pengbo/StarGAN/data/CelebA_nocrop/images',
+parser.add_argument('--data_dir', type=str, default='/hd1/xuanxinsheng/data/celebA/img_align_celeba_png/',
                     help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
 parser.add_argument('--n_epochs', type=int, default=30, help='number of epochs of training')
-parser.add_argument('--batch_size', type=int, default=64, help='size of the batches')
+parser.add_argument('--batch_size', type=int, default=128, help='size of the batches')
 parser.add_argument('--lr', type=float, default=0.0002, help='adam: learning rate')
 parser.add_argument('--decay_epoch', type=int, default=20, help='number of epochs before lr decay')
 parser.add_argument('--decay_order', type=float, default=0.1, help='order of lr decay')
@@ -32,15 +37,15 @@ parser.add_argument('--n_cpu', type=int, default=8, help='number of cpu threads 
 parser.add_argument('--latent_dim', type=int, default=100, help='dimensionality of the latent space')
 parser.add_argument('--img_size', type=int, default=128, help='size of each image dimension')
 parser.add_argument('--channels', type=int, default=3, help='number of image channels')
-parser.add_argument('--sample_step', type=int, default=500, help='number of iters between image sampling')
-parser.add_argument('--sample_dir', type=str, default='/hd2/pengbo/StarGAN/DCGAN_celebA/sample', help='dir of saved '
+parser.add_argument('--sample_step', type=int, default=1, help='number of iters between image sampling')
+parser.add_argument('--sample_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/img/', help='dir of saved '
                                                                                                        'sample images')
 parser.add_argument('--use_tensorboard', type=str2bool, default=True, help='whether to use tensorboard for monitoring')
-parser.add_argument('--log_dir', type=str, default='/hd2/pengbo/StarGAN/DCGAN_celebA/log', help='dir of '
+parser.add_argument('--log_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/log/', help='dir of '
                                                                                                 'tensorboard logs')
 parser.add_argument('--log_step', type=int, default=10, help='number of iters to print and log')
 parser.add_argument('--ckpt_step', type=int, default=1000, help='number of iters for model saving')
-parser.add_argument('--ckpt_dir', type=str, default='/hd2/pengbo/StarGAN/DCGAN_celebA/model', help='dir of saved model '
+parser.add_argument('--ckpt_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/model/', help='dir of saved model '
                                                                                              'checkpoints')
 parser.add_argument('--load_G', type=str, default=None, help='path of to the loaded Generator weights')
 parser.add_argument('--load_D', type=str, default=None, help='path of to the loaded Discriminator weights')
@@ -62,6 +67,7 @@ print(opt)
 cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
+print(device)
 
 def weights_init_normal(m):
     classname = m.__class__.__name__
@@ -227,7 +233,7 @@ if opt.mode == 'trainGAN':
                         logger.scalar_summary(tag, value, batches_done)
 
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
-                save_image(gen_imgs.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
+                save_image(gen_imgs.data[:1], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
                            normalize=True)
                 gen_imgs_fixed = generator(z_fixed)
                 save_image(gen_imgs_fixed.data, os.path.join(opt.sample_dir, 'fixed-%05d.png' % batches_done), nrow=5,
@@ -257,25 +263,30 @@ elif opt.mode == 'trainD':
         BCEloss.cuda(opt.device_id)
 
     # initialize G with trained weights, and D with random or trained weights
-    if opt.load_G is None:
-        exit('load_G is not provided!')
-    generator.load_state_dict(torch.load(opt.load_G))
-    generator.eval()
-    if opt.load_D is None:
-        discriminator.apply(weights_init_normal)
-    else:
-        discriminator.load_state_dict(torch.load(opt.load_D))
+    # if opt.load_G is None:
+    #     exit('load_G is not provided!')
+    # generator.load_state_dict(torch.load(opt.load_G))
+    # generator.eval()
+    # if opt.load_D is None:
+    #     discriminator.apply(weights_init_normal)
+    # else:
+    #     discriminator.load_state_dict(torch.load(opt.load_D))
+    discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels, opt.model)
+    discriminator.cuda(opt.device_id)
+    discriminator.apply(weights_init_normal)
 
     # generate GAN images and make dataloader
     data_loader.generate(generator, opt.N_generated, opt.dir_generated, cuda, opt.batch_size, opt.latent_dim,
                          device)
     transform0 = T.Compose([T.Resize(opt.img_size),
-                           T.ToTensor(),
-                           T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+                            T.Lambda(lambda x: data_loader.gaussian_blur(x)),
+                            T.ToTensor(),
+                            T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     GAN_data_train = data_loader.ImageFolderSingle(opt.dir_generated, opt.train_perc, 'train', transform0, 0)
 
     transform1 = T.Compose([T.CenterCrop(opt.crop_size),
                             T.Resize(opt.img_size),
+                            T.Lambda(lambda x: data_loader.gaussian_blur(x)),
                             T.ToTensor(),
                             T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     CelebA_data_train = data_loader.ImageFolderSingle(opt.data_dir, opt.train_perc, 'train',
