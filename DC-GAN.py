@@ -14,11 +14,15 @@ import torch.nn.functional as F
 import os
 import torch.nn as nn
 import cv2
+import random
+from PIL import Image
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
 
+
 def str2bool(v):
     return v.lower() in ('true')
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainD, testD, trainG]')
@@ -39,14 +43,14 @@ parser.add_argument('--img_size', type=int, default=128, help='size of each imag
 parser.add_argument('--channels', type=int, default=3, help='number of image channels')
 parser.add_argument('--sample_step', type=int, default=1, help='number of iters between image sampling')
 parser.add_argument('--sample_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/img/', help='dir of saved '
-                                                                                                       'sample images')
+                                                                                                'sample images')
 parser.add_argument('--use_tensorboard', type=str2bool, default=True, help='whether to use tensorboard for monitoring')
 parser.add_argument('--log_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/log/', help='dir of '
-                                                                                                'tensorboard logs')
+                                                                                             'tensorboard logs')
 parser.add_argument('--log_step', type=int, default=10, help='number of iters to print and log')
 parser.add_argument('--ckpt_step', type=int, default=1000, help='number of iters for model saving')
 parser.add_argument('--ckpt_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/model/', help='dir of saved model '
-                                                                                             'checkpoints')
+                                                                                                'checkpoints')
 parser.add_argument('--load_G', type=str, default=None, help='path of to the loaded Generator weights')
 parser.add_argument('--load_D', type=str, default=None, help='path of to the loaded Discriminator weights')
 parser.add_argument('--N_generated', type=int, default=1000, help='number of generated images')
@@ -69,10 +73,12 @@ Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
 print(device)
 
+
 def weights_init_normal(m):
     classname = m.__class__.__name__
     if classname.find('Conv') != -1:
         torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+
 
 def gradient_penalty(x, y, f):
     # interpolation
@@ -85,13 +91,15 @@ def gradient_penalty(x, y, f):
     o = f(z)
     g = torch.autograd.grad(o, z, grad_outputs=torch.ones(o.size(), device=device),
                             create_graph=True, retain_graph=True)[0].view(z.size(0), -1)
-    gp = ((g.norm(p=2, dim=1) - 1)**2).mean()
+    gp = ((g.norm(p=2, dim=1) - 1) ** 2).mean()
 
     return gp
+
 
 if opt.use_tensorboard:
     os.makedirs(opt.log_dir, exist_ok=True)
     from logger import Logger
+
     logger = Logger(opt.log_dir)
 
 if opt.mode == 'trainGAN':
@@ -125,7 +133,7 @@ if opt.mode == 'trainGAN':
     CelebA_data_train = data_loader.ImageFolderSingle(opt.data_dir, opt.train_perc, 'train',
                                                       transform, 1)
     dataloader = data.DataLoader(CelebA_data_train, batch_size=opt.batch_size, shuffle=True,
-                                         num_workers=opt.n_cpu)
+                                 num_workers=opt.n_cpu)
 
     # Optimizers
     if opt.model in ('DCGAN', 'WGAN-GP'):
@@ -141,7 +149,7 @@ if opt.mode == 'trainGAN':
     # ----------
     #  Training
     # ----------
-    last_iter = opt.n_epochs*len(dataloader)
+    last_iter = opt.n_epochs * len(dataloader)
     for epoch in range(opt.n_epochs):
         for i, (imgs, _) in enumerate(dataloader):
 
@@ -180,17 +188,17 @@ if opt.mode == 'trainGAN':
                 losses['D/loss_fake'] = fake_loss.item()
                 losses['D/loss_mean'] = d_loss.item()
             elif opt.model == 'WGAN':
-                d_loss = real_loss+fake_loss
+                d_loss = real_loss + fake_loss
                 losses['D/logit_real'] = -real_loss.item()
                 losses['D/logit_fake'] = fake_loss.item()
                 losses['D/Wasserstain-D'] = -d_loss.item()
             elif opt.model == 'WGAN-GP':
                 gp = gradient_penalty(real_imgs.data, gen_imgs.data, discriminator)
-                d_loss = real_loss + fake_loss + opt.gp*gp
+                d_loss = real_loss + fake_loss + opt.gp * gp
                 losses['D/logit_real'] = -real_loss.item()
                 losses['D/logit_fake'] = fake_loss.item()
                 losses['D/Wasserstain-D'] = -(real_loss + fake_loss).item()
-                losses['D/gp'] = opt.gp*gp
+                losses['D/gp'] = opt.gp * gp
 
             discriminator.zero_grad()
             d_loss.backward()
@@ -224,7 +232,7 @@ if opt.mode == 'trainGAN':
             batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
             if batches_done % opt.log_step == 0 or batches_done == last_iter:
                 t_now = time.time()
-                t_elapse = t_now-t_start
+                t_elapse = t_now - t_start
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
                       % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item()))
@@ -245,8 +253,8 @@ if opt.mode == 'trainGAN':
                 torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
                 print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
 
-        if epoch+1-opt.decay_epoch >= 0 and (epoch+1-opt.decay_epoch)%opt.decay_every == 0:
-            opt.lr = opt.lr*opt.decay_order
+        if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
+            opt.lr = opt.lr * opt.decay_order
             for param_group in optimizer_G.param_groups:
                 param_group['lr'] = opt.lr
             for param_group in optimizer_D.param_groups:
@@ -279,14 +287,14 @@ elif opt.mode == 'trainD':
     data_loader.generate(generator, opt.N_generated, opt.dir_generated, cuda, opt.batch_size, opt.latent_dim,
                          device)
     transform0 = T.Compose([T.Resize(opt.img_size),
-                            T.Lambda(lambda x: data_loader.gaussian_blur(x)),
+                            T.Lambda(lambda x: data_loader.GaussieNoisy(x)),
                             T.ToTensor(),
                             T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     GAN_data_train = data_loader.ImageFolderSingle(opt.dir_generated, opt.train_perc, 'train', transform0, 0)
 
     transform1 = T.Compose([T.CenterCrop(opt.crop_size),
                             T.Resize(opt.img_size),
-                            T.Lambda(lambda x: data_loader.gaussian_blur(x)),
+                            T.Lambda(lambda x: data_loader.GaussieNoisy(x)),
                             T.ToTensor(),
                             T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     CelebA_data_train = data_loader.ImageFolderSingle(opt.data_dir, opt.train_perc, 'train',
@@ -296,7 +304,7 @@ elif opt.mode == 'trainD':
     mixed_loader_train = data.DataLoader(mixed_data_train, batch_size=opt.batch_size, shuffle=True,
                                          num_workers=opt.n_cpu)
 
-    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt.b1,opt.b2))
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
     # ----------
     #  Training
     # ----------
@@ -304,6 +312,7 @@ elif opt.mode == 'trainD':
     for epoch in range(opt.n_epochs):
         for i, (imgs, labels) in enumerate(mixed_loader_train):
             # Configure input
+            # imgs = torch.from_numpy((data_loader.gaussian_blur(imgs.numpy())))
             imgs = Variable(imgs.to(device))
             labels = Variable(labels.to(device))
             losses = {}
@@ -318,8 +327,8 @@ elif opt.mode == 'trainD':
             labels_cpu = torch.squeeze(labels.cpu())
             predicts_cpu = torch.squeeze(predicts.cpu())
             pred_labels = torch.zeros_like(labels_cpu)
-            pred_labels[predicts_cpu>0.5] = 1
-            acc = torch.sum(pred_labels == labels_cpu).float()/len(labels_cpu)
+            pred_labels[predicts_cpu > 0.5] = 1
+            acc = torch.sum(pred_labels == labels_cpu).float() / len(labels_cpu)
             losses['D/acuracy_train'] = acc
 
             loss.backward()
@@ -331,7 +340,7 @@ elif opt.mode == 'trainD':
                 t_elapse = t_now - t_start
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [D loss: %f] [Accuracy: %f]"
-                      % (t_elapse, epoch+1, opt.n_epochs, i+1, len(mixed_loader_train), loss.item(), acc))
+                      % (t_elapse, epoch + 1, opt.n_epochs, i + 1, len(mixed_loader_train), loss.item(), acc))
                 if opt.use_tensorboard:
                     for tag, value in losses.items():
                         logger.scalar_summary(tag, value, batches_done)
@@ -369,23 +378,38 @@ elif opt.mode == 'testD':
 
     mixed_data_test = data.ConcatDataset([GAN_data_test, CelebA_data_test])
     mixed_loader_test = data.DataLoader(mixed_data_test, batch_size=opt.batch_size, shuffle=True,
-                                         num_workers=opt.n_cpu)
+                                        num_workers=opt.n_cpu)
     # ----------
     #  Testing
     # ----------
     last_iter = len(mixed_loader_test)
+    batch100_correct_of_real = 0
+    batch100_correct_of_fake = 0
     num_correct = 0
+    num_correct_real = 0
+    num_correct_fake = 0
+
     for i, (imgs, labels) in enumerate(mixed_loader_test):
         # Configure input
         imgs = Variable(imgs.to(device))
         labels = Variable(labels.to(device))
 
         predicts = discriminator(imgs)
-        labels_cpu = torch.squeeze(labels.cpu())
+        labels_cpu = torch.squeeze(labels.cpu())  # remove 1 dim
         predicts_cpu = torch.squeeze(predicts.cpu())
-        pred_labels = torch.zeros_like(labels_cpu)
+        pred_labels = torch.zeros_like(labels_cpu)  # return a 0 tensor
         pred_labels[predicts_cpu > 0.5] = 1
+
+        correct_of_real = torch.zeros_like(labels_cpu)
+        correct_of_real = pred_labels * labels_cpu
         acc = torch.sum(pred_labels == labels_cpu).float() / len(labels_cpu)
+        batch100_correct_of_real = batch100_correct_of_real + torch.sum(correct_of_real).float()
+        batch100_correct_of_fake = batch100_correct_of_fake + torch.sum(pred_labels == labels_cpu).float() - torch.sum(
+            correct_of_real).float()
+
+        num_correct_real = num_correct_real + torch.sum(correct_of_real).float()
+        num_correct_fake = num_correct_fake + torch.sum(pred_labels == labels_cpu).float() - torch.sum(
+            correct_of_real).float()
         num_correct = num_correct + torch.sum(pred_labels == labels_cpu).float()
 
         batches_done = i + 1
@@ -393,12 +417,16 @@ elif opt.mode == 'testD':
             t_now = time.time()
             t_elapse = t_now - t_start
             t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
-            print("[Time %s] [Batch %d/%d] [Batch Accuracy: %f]"
-                  % (t_elapse, i, len(mixed_loader_test), acc))
+            print("[Time %s] [Batch %d/%d] [Batch Accuracy: %f] [batch_correct_of_real: %d] [batch_correct_of_fake: %d]"
+                  % (t_elapse, i, len(mixed_loader_test), acc, batch100_correct_of_real, batch100_correct_of_fake))
+            batch100_correct_of_real = 0
+            batch100_correct_of_fake = 0
 
-    test_acc = num_correct/len(mixed_data_test)
-    print('%d test images, correct classification is %d, total accuracy: %f' %
-          (len(mixed_data_test), num_correct, test_acc))
+    test_acc = num_correct / len(mixed_data_test)
+    print('%d test images, correct classification is %d,total accuracy: %f' % (
+        len(mixed_data_test), num_correct, test_acc))
+    print(' correct of real %d,accuracy:%f, correct of fake %d,accuracy:%f' % (
+        num_correct_real, (num_correct_real / num_correct), num_correct_fake, (num_correct_fake / num_correct)))
 
 elif opt.mode == 'trainG':
     os.makedirs(opt.sample_dir, exist_ok=True)
