@@ -17,8 +17,6 @@ import cv2
 import random
 from PIL import Image
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
-
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -287,14 +285,14 @@ elif opt.mode == 'trainD':
     data_loader.generate(generator, opt.N_generated, opt.dir_generated, cuda, opt.batch_size, opt.latent_dim,
                          device)
     transform0 = T.Compose([T.Resize(opt.img_size),
-                            T.Lambda(lambda x: data_loader.GaussieNoisy(x)),
+                            T.Lambda(lambda x: data_loader.gaussian_blur(x)),
                             T.ToTensor(),
                             T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     GAN_data_train = data_loader.ImageFolderSingle(opt.dir_generated, opt.train_perc, 'train', transform0, 0)
 
     transform1 = T.Compose([T.CenterCrop(opt.crop_size),
                             T.Resize(opt.img_size),
-                            T.Lambda(lambda x: data_loader.GaussieNoisy(x)),
+                            T.Lambda(lambda x: data_loader.gaussian_blur(x)),
                             T.ToTensor(),
                             T.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
     CelebA_data_train = data_loader.ImageFolderSingle(opt.data_dir, opt.train_perc, 'train',
@@ -376,7 +374,8 @@ elif opt.mode == 'testD':
     CelebA_data_test = data_loader.ImageFolderSingle(opt.data_dir, opt.train_perc,
                                                      'test', transform1, 1)
 
-    mixed_data_test = data.ConcatDataset([GAN_data_test, CelebA_data_test])
+    # mixed_data_test = data.ConcatDataset([GAN_data_test, CelebA_data_test])
+    mixed_data_test = CelebA_data_test
     mixed_loader_test = data.DataLoader(mixed_data_test, batch_size=opt.batch_size, shuffle=True,
                                         num_workers=opt.n_cpu)
     # ----------
@@ -399,6 +398,8 @@ elif opt.mode == 'testD':
         predicts_cpu = torch.squeeze(predicts.cpu())
         pred_labels = torch.zeros_like(labels_cpu)  # return a 0 tensor
         pred_labels[predicts_cpu > 0.5] = 1
+        # print('labels_cpu', labels_cpu)
+        # print('prelabels', pred_labels)
 
         correct_of_real = torch.zeros_like(labels_cpu)
         correct_of_real = pred_labels * labels_cpu
@@ -426,7 +427,8 @@ elif opt.mode == 'testD':
     print('%d test images, correct classification is %d,total accuracy: %f' % (
         len(mixed_data_test), num_correct, test_acc))
     print(' correct of real %d,accuracy:%f, correct of fake %d,accuracy:%f' % (
-        num_correct_real, (num_correct_real / num_correct), num_correct_fake, (num_correct_fake / num_correct)))
+        num_correct_real, (num_correct_real / 101299), num_correct_fake,
+        (num_correct_fake / 101299)))
 
 elif opt.mode == 'trainG':
     os.makedirs(opt.sample_dir, exist_ok=True)

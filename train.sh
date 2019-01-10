@@ -46,14 +46,14 @@
 
 #----------------------------------------------------------------------------------------------------
 
-## training of D celebA VS DCGAN blur
+# training of D celebA VS DCGAN
 #python DC-GAN.py --mode='trainD' \
 #--load_G='/hd1/xuanxinsheng/result/model/wgan-gp/Epoch_(50).ckpt' \
 #--dir_generated='/hd1/xuanxinsheng/data/DCGAN' \
 #--log_dir='/hd1/xuanxinsheng/result/celeba-dcgan/log/' --ckpt_dir='/hd1/xuanxinsheng/result/celeba-dcgan/model/' \
 #--n_epochs=1 --device_id=0
 
-# training of D celebA VS WGANGP blur
+# training of D celebA VS WGANGP
 #python DC-GAN.py --mode='trainD' \
 #--load_G='/hd1/xuanxinsheng/result/model/wgan-gp/Epoch_(50).ckpt' \
 #--dir_generated='/hd1/xuanxinsheng/data/WGANGP' \
@@ -61,16 +61,20 @@
 #--n_epochs=1 --device_id=1
 
 ## testing of D celebA VS DCGAN
-python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/DCGAN --log_step=100 \
---load_D=/hd1/xuanxinsheng/result/celeba-dcgan/model/Forensics-D.ckpt --device_id=0
+#python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/WGANGP --log_step=100 \
+#--load_D=/hd1/xuanxinsheng/result/celeba-dcgan/model/Forensics-D.ckpt --device_id=0
 
 ## testing of D celebA VS WGANGP
-#python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/WGANGP --log_step=100 \
-#--load_D=/hd1/xuanxinsheng/result/celeba-wgangp/model/Forensics-D.ckpt --device_id=1
+python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/DCGAN --log_step=100 \
+--load_D=/hd1/xuanxinsheng/result/celeba-wgangp/model/no_operation/Forensics-D.ckpt --device_id=1
 
-## training of D for xuan
+# training of D for xuan
 #python DC-GAN.py --mode='trainD' \
 #--load_G='/hd1/xuanxinsheng/result/model/wgan-gp/Epoch_(50).ckpt' \
 #--dir_generated='/hd1/xuanxinsheng/data/DCGAN' \
 #--log_dir='/hd1/xuanxinsheng/result/xxs/log/' --ckpt_dir='/hd1/xuanxinsheng/result/xxs/model/' \
 #--n_epochs=1 --device_id=0
+
+## testing of D for xuan
+#python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/DCGAN --log_step=100 \
+#--load_D=/hd1/xuanxinsheng/result/celeba-wgangp/model/Forensics-D.ckpt --device_id=0
