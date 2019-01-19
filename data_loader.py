@@ -39,7 +39,7 @@ def gaussian_blur(x):
     ksizex = random.randrange(1, 7, 2)
     ksizey = random.randrange(1, 7, 2)
     kernel_size = (ksizex, ksizex)
-    print(kernel_size)
+    # print(kernel_size)
     img1 = cv2.cvtColor(np.asarray(x), cv2.COLOR_RGB2BGR)
     bl = cv2.GaussianBlur(img1, kernel_size, 0)
     img2 = Image.fromarray(cv2.cvtColor(bl, cv2.COLOR_BGR2RGB))

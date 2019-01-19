@@ -344,6 +344,7 @@ elif opt.mode == 'trainD':
                         logger.scalar_summary(tag, value, batches_done)
 
             if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
+                os.makedirs(opt.ckpt_dir, exist_ok=True)
                 torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'Forensics-D.ckpt'))
                 print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
 
@@ -355,6 +356,7 @@ elif opt.mode == 'trainD':
 
 elif opt.mode == 'testD':
     discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels)
+    discriminator.eval()
     if cuda:
         discriminator.cuda(opt.device_id)
 
