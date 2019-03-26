@@ -22,10 +22,14 @@ def str2bool(v):
     return v.lower() in ('true')
 
 
+CLASS_IDS_ALL = (
+    '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
+    '03691459,04090263,04256520,04379243,04401088,04530566')
+DATASET_DIRECTORY = '/hd2/pengbo/mesh_reconstruction/dataset/'
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainD, testD, trainG]')
-parser.add_argument('--data_dir', type=str, default='/hd1/xuanxinsheng/data/celebA/img_align_celeba_png/',
-                    help='dir of dataset')
+parser.add_argument('--data_dir', type=str, help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
 parser.add_argument('--n_epochs', type=int, default=30, help='number of epochs of training')
 parser.add_argument('--batch_size', type=int, default=128, help='size of the batches')
@@ -37,17 +41,17 @@ parser.add_argument('--b1', type=float, default=0.5, help='adam: decay of first 
 parser.add_argument('--b2', type=float, default=0.999, help='adam: decay of first order momentum of gradient')
 parser.add_argument('--n_cpu', type=int, default=8, help='number of cpu threads to use during batch generation')
 parser.add_argument('--latent_dim', type=int, default=100, help='dimensionality of the latent space')
-parser.add_argument('--img_size', type=int, default=128, help='size of each image dimension')
+parser.add_argument('--img_size', type=int, help='size of each image dimension')
 parser.add_argument('--channels', type=int, default=3, help='number of image channels')
 parser.add_argument('--sample_step', type=int, default=1, help='number of iters between image sampling')
-parser.add_argument('--sample_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/img/', help='dir of saved '
+parser.add_argument('--sample_dir', type=str, help='dir of saved '
                                                                                                 'sample images')
 parser.add_argument('--use_tensorboard', type=str2bool, default=True, help='whether to use tensorboard for monitoring')
-parser.add_argument('--log_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/log/', help='dir of '
+parser.add_argument('--log_dir', type=str, help='dir of '
                                                                                              'tensorboard logs')
 parser.add_argument('--log_step', type=int, default=10, help='number of iters to print and log')
 parser.add_argument('--ckpt_step', type=int, default=1000, help='number of iters for model saving')
-parser.add_argument('--ckpt_dir', type=str, default='/hd1/xuanxinsheng/result/xxs/model/', help='dir of saved model '
+parser.add_argument('--ckpt_dir', type=str, help='dir of saved model '
                                                                                                 'checkpoints')
 parser.add_argument('--load_G', type=str, default=None, help='path of to the loaded Generator weights')
 parser.add_argument('--load_D', type=str, default=None, help='path of to the loaded Discriminator weights')
@@ -62,6 +66,8 @@ parser.add_argument('--clip_value', type=float, default=0.01, help='clip value f
 parser.add_argument('--batches_done', type=int, default=0, help='previous batches_done when '
                                                                 'loading ckpt and continue traning')
 parser.add_argument('--gp', type=float, default=10.0, help='gradient penalty for WGAN-GP')
+
+parser.add_argument('--class_ids', type=str, default=CLASS_IDS_ALL)
 
 t_start = time.time()
 opt = parser.parse_args()
@@ -124,14 +130,8 @@ if opt.mode == 'trainGAN':
         discriminator.load_state_dict(torch.load(opt.load_D))
 
     # Configure data loader
-    transform = T.Compose([T.CenterCrop(opt.crop_size),
-                           T.Resize(opt.img_size),
-                           T.ToTensor(),
-                           T.Lambda(lambda x: data_loader.rescale(x))])
-    CelebA_data_train = data_loader.ImageFolderSingle(opt.data_dir, opt.train_perc, 'train',
-                                                      transform, 1)
-    dataloader = data.DataLoader(CelebA_data_train, batch_size=opt.batch_size, shuffle=True,
-                                 num_workers=opt.n_cpu)
+    dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train')
+    dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True)
 
     # Optimizers
     if opt.model in ('DCGAN', 'WGAN-GP'):
@@ -228,6 +228,11 @@ if opt.mode == 'trainGAN':
                 optimizer_G.step()
 
             batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
+            if batches_done == 1:
+                save_image(real_imgs.data[:25], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=5,
+                           normalize=True)
+                print('Saved real sample image to {}...'.format(opt.sample_dir))
+
             if batches_done % opt.log_step == 0 or batches_done == last_iter:
                 t_now = time.time()
                 t_elapse = t_now - t_start
@@ -239,17 +244,17 @@ if opt.mode == 'trainGAN':
                         logger.scalar_summary(tag, value, batches_done)
 
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
-                save_image(gen_imgs.data[:1], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
+                save_image(gen_imgs.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
                            normalize=True)
                 gen_imgs_fixed = generator(z_fixed)
                 save_image(gen_imgs_fixed.data, os.path.join(opt.sample_dir, 'fixed-%05d.png' % batches_done), nrow=5,
                            normalize=True)
                 print('Saved sample image to {}...'.format(opt.sample_dir))
 
-            if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
-                torch.save(generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
-                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
-                print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
+            # if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
+            #     torch.save(generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
+            #     torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
+            #     print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
 
         if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
             opt.lr = opt.lr * opt.decay_order

@@ -9,6 +9,7 @@ import glob
 from PIL import Image
 import cv2
 import random
+import tqdm
 
 
 def rescale(x):
@@ -149,3 +150,54 @@ class ImageFolderSingle(data.Dataset):
             exit('GAN_data mode must be one of [train test]')
         image = Image.open(self.img_paths[index_])
         return self.transform(image), torch.FloatTensor(1).fill_(self.label)
+
+class ShapeNet(data.Dataset):
+    def __init__(self, directory=None, class_ids=None, set_name=None):
+        self.class_ids = class_ids
+        self.set_name = set_name
+        self.elevation = 30.
+        self.distance = 2.732
+
+        images = []
+        # voxels = []
+        self.num_data = {}
+        self.pos = {}
+        count = 0
+        loop = tqdm.tqdm(self.class_ids)
+        loop.set_description('Loading dataset')
+        for class_id in loop:
+            images.append(np.load(
+                os.path.join(directory, '%s_%s_images.npz' % (class_id, set_name)))['arr_0'])
+            # voxels.append(np.load(
+            #     os.path.join(directory, '%s_%s_voxels.npz' % (class_id, set_name))).items()[0][1])
+            self.num_data[class_id] = images[-1].shape[0]
+            self.pos[class_id] = count
+            count += self.num_data[class_id]
+        images = np.concatenate(images, axis=0).reshape((-1, 4, 64, 64))
+        images = np.ascontiguousarray(images)
+        self.images = images
+        # self.voxels = np.ascontiguousarray(np.concatenate(voxels, axis=0))
+        del images
+        # del voxels
+
+    def __len__(self):
+        N = 0
+        for class_id in self.class_ids:
+            N = N + self.num_data[class_id]*24
+        return N
+
+    def __getitem__(self, item):
+        image = self.images[item,3,:,:].astype('float32') / 255.
+        image = image.reshape((1, 64, 64))  # image: [1, 64, 64]
+        imageT = torch.from_numpy(image)
+        label = 1
+        return imageT, torch.FloatTensor(1).fill_(label)
+
+    def get_all_batches_for_evaluation(self, batch_size, class_id):
+        data_ids = np.arange(self.num_data[class_id]) + self.pos[class_id]
+        viewpoint_ids = np.tile(np.arange(24), data_ids.size)
+        data_ids = np.repeat(data_ids, 24) * 24 + viewpoint_ids
+        for i in range((data_ids.size - 1) / batch_size + 1):
+            images = self.images[data_ids[i * batch_size:(i + 1) * batch_size]].astype('float32') / 255.
+            voxels = self.voxels[data_ids[i * batch_size:(i + 1) * batch_size] / 24]
+            yield images, voxels

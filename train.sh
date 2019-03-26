@@ -12,10 +12,12 @@
 #--load_G=/hd2/pengbo/StarGAN/DCGAN_celebA/model_WGAN/121000-G.ckpt \
 #--load_D=/hd2/pengbo/StarGAN/DCGAN_celebA/model_WGAN/121000-D.ckpt --batches_done=121000
 
-## training of WGAN-GP
-#python DC-GAN.py --model=WGAN-GP #--ckpt_dir=/hd3/xuanxinsheng/result/WGAN_celebA/v2/model/ \
-#--log_dir=/hd2/pengbo/StarGAN/DCGAN_celebA/log_WGAN-GP_I --sample_dir=/hd2/pengbo/StarGAN/DCGAN_celebA/sample_WGAN-GP_I \
-#--G_every=5 --sample_step=500 --n_epochs=50 --decay_epoch=50
+# training of WGAN-GP
+python DC-GAN.py --model=WGAN-GP --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+--log_dir=/hd2/pengbo/mesh_reconstruction/models/log --sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample \
+--ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt \
+--G_every=5 --sample_step=500 --n_epochs=50 --decay_epoch=50 --device_id=2 --class_ids=02691156 \
+--channels=1 --img_size=64
 
 ## training of D
 #python DC-GAN.py --mode='trainD' \
@@ -64,9 +66,9 @@
 #python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/DCGAN --log_step=100 \
 #--load_D=/hd2/pengbo/StarGAN/DCGAN_celebA/model_trainD_DCGAN/Forensics-D.ckpt --device_id=0
 
-## testing of D celebA VS WGANGP
-python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/WGANGP --log_step=100 \
---load_D=/hd2/pengbo/StarGAN/DCGAN_celebA/model_trainD_WGAN/Forensics-D.ckpt --device_id=0
+### testing of D celebA VS WGANGP
+#python DC-GAN.py --mode=testD --dir_generated=/hd1/xuanxinsheng/data/WGANGP --log_step=100 \
+#--load_D=/hd2/pengbo/StarGAN/DCGAN_celebA/model_trainD_WGAN/Forensics-D.ckpt --device_id=0
 
 # training of D for xuan
 #python DC-GAN.py --mode='trainD' \
