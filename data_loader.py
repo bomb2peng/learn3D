@@ -10,6 +10,8 @@ from PIL import Image
 import cv2
 import random
 import tqdm
+import neural_renderer as nr
+import skimage.transform as skT
 
 
 def rescale(x):
@@ -151,12 +153,14 @@ class ImageFolderSingle(data.Dataset):
         image = Image.open(self.img_paths[index_])
         return self.transform(image), torch.FloatTensor(1).fill_(self.label)
 
+
 class ShapeNet(data.Dataset):
-    def __init__(self, directory=None, class_ids=None, set_name=None):
+    def __init__(self, directory=None, class_ids=None, set_name=None, img_resize=64):
         self.class_ids = class_ids
         self.set_name = set_name
         self.elevation = 30.
         self.distance = 2.732
+        self.img_resize = img_resize
 
         images = []
         # voxels = []
@@ -175,7 +179,10 @@ class ShapeNet(data.Dataset):
             count += self.num_data[class_id]
         images = np.concatenate(images, axis=0).reshape((-1, 4, 64, 64))
         images = np.ascontiguousarray(images)
+        # images = images[range(5,images.shape[0],24),:,:,:]      # only take a certain pose as training data. REMEMBER
+        #  the #*24 in line 188
         self.images = images
+        self.n_objects = count
         # self.voxels = np.ascontiguousarray(np.concatenate(voxels, axis=0))
         del images
         # del voxels
@@ -183,21 +190,45 @@ class ShapeNet(data.Dataset):
     def __len__(self):
         N = 0
         for class_id in self.class_ids:
-            N = N + self.num_data[class_id]*24
+            N = N + self.num_data[class_id] *24
         return N
 
     def __getitem__(self, item):
-        image = self.images[item,3,:,:].astype('float32') / 255.
-        image = image.reshape((1, 64, 64))  # image: [1, 64, 64]
+        image = self.images[item,:,:,:].astype('float32') / 255.
+        image = skT.resize(image.transpose((1,2,0)), (self.img_resize,self.img_resize), anti_aliasing=True)
+        image = np.float32(image.transpose((2,0,1)))
         imageT = torch.from_numpy(image)
-        label = 1
-        return imageT, torch.FloatTensor(1).fill_(label)
+        view_id = item % 24
+        viewpoints = nr.get_points_from_angles(self.distance, self.elevation, -view_id * 15)
+        return imageT, torch.Tensor(viewpoints), view_id
 
-    def get_all_batches_for_evaluation(self, batch_size, class_id):
-        data_ids = np.arange(self.num_data[class_id]) + self.pos[class_id]
-        viewpoint_ids = np.tile(np.arange(24), data_ids.size)
-        data_ids = np.repeat(data_ids, 24) * 24 + viewpoint_ids
-        for i in range((data_ids.size - 1) / batch_size + 1):
-            images = self.images[data_ids[i * batch_size:(i + 1) * batch_size]].astype('float32') / 255.
-            voxels = self.voxels[data_ids[i * batch_size:(i + 1) * batch_size] / 24]
-            yield images, voxels
+
+class ShapeNet_Sampler_Batch(data.Sampler):
+    def __init__(self, data_source, batch_size):
+        self.data_source = data_source
+        self.batch_size = batch_size
+
+    def __iter__(self):
+        if self.batch_size%2 is not 0:
+            raise ValueError("batch_size needs to be an even number, but got {}".format(self.batch_size))
+
+        n_objects = self.batch_size//2
+        data_ids_a = []
+        data_ids_b = []
+        for i in range(len(self.data_source)//2):
+            class_id = np.random.choice(self.data_source.class_ids)
+            object_id = np.random.randint(0, self.data_source.num_data[class_id])
+            viewpoint_id_a = np.random.randint(0, 24)
+            viewpoint_id_b = np.random.randint(0, 24)
+            data_id_a = (object_id + self.data_source.pos[class_id]) * 24 + viewpoint_id_a
+            data_id_b = (object_id + self.data_source.pos[class_id]) * 24 + viewpoint_id_b
+            data_ids_a.append(data_id_a)
+            data_ids_b.append(data_id_b)
+            if len(data_ids_a) == n_objects:
+                data_ids = data_ids_a + data_ids_b
+                yield data_ids
+                data_ids_a = []
+                data_ids_b = []
+
+    def __len__(self):
+        return len(self.data_source)//self.batch_size
