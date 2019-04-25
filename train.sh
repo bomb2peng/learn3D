@@ -16,13 +16,22 @@
 # 02958343--car, 02691156--airplane, 02828884--bench, 02933112--dresser, 03001627--chair, 03211117--display,
 # 03636649--lamp, 03691459--loudspeaker, 04090263--riffle, 04256520--sofa, 04379243--table, 04401088--telephone,
 # 04530566--boat
-CUDA_VISIBLE_DEVICES=1 python 3D-GAN.py --mode=trainGAN --model=WGAN-GP --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
---log_dir=/hd2/pengbo/mesh_reconstruction/models/log3D_GAN --sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample3D_GAN \
---ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_GAN  \
---obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_162.obj \
---G_every=1 --sample_step=100 --log_step=10 --ckpt_step=500  --batch_size=64 \
---device_id=0 --class_ids=02958343 --img_size=64 --lambda_smth=10 --latent_dim=512 \
---n_epochs=20 --decay_epoch=2 --decay_every=1 --decay_order=0.8 --conditioned=0 --channels=1
+#CUDA_VISIBLE_DEVICES=1 python 3D-GAN.py --mode=trainGAN --model=WGAN-GP --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+#--log_dir=/hd2/pengbo/mesh_reconstruction/models/log3D_GAN --sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample3D_GAN \
+#--ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_GAN  \
+#--obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_42.obj \
+#--G_every=5 --sample_step=100 --log_step=10 --ckpt_step=100  --batch_size=128 \
+#--device_id=0 --class_ids=02958343 --img_size=64 --lambda_smth=0.1 --lambda_feat=0 --latent_dim=512 \
+#--n_epochs=20 --decay_epoch=2 --decay_every=1 --decay_order=0.8 --conditioned=1 --channels=25
+##--load_G=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_GAN/300-G.ckpt \
+##--load_D=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_GAN/300-D.ckpt --batches_done=300
+
+### sampling from trained model
+CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=sampleGAN \
+--sample_dir=/hd2/pengbo/mesh_reconstruction/models/samples \
+--obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_42.obj \
+--load_G=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_GAN/10000-G.ckpt \
+--batch_size=32 --device_id=0 --latent_dim=512 --sample_prefix=car
 
 ## training of img-GAN
 #CUDA_VISIBLE_DEVICES=1 python imgGAN.py --model=DCGAN --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \

@@ -25,7 +25,7 @@ CLASS_IDS_ALL = (
 DATASET_DIRECTORY = '/hd2/pengbo/mesh_reconstruction/dataset/'
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainAE]')
+parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainAE, sampleGAN]')
 parser.add_argument('--conditioned', type=int, default=0, help='whether to use conditioned GAN')
 parser.add_argument('--data_dir', type=str, help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
@@ -70,6 +70,13 @@ parser.add_argument('--class_ids', type=str, default=CLASS_IDS_ALL, help='use wh
 parser.add_argument('--obj_dir', type=str, help='base sphere obj file path')
 parser.add_argument('--lambda_smth', type=float, default=0.1, help='weight for mesh smoothness loss')
 
+parser.add_argument('--n_samples', type=int, default=64, help='number of samples to generate and save')
+parser.add_argument('--sample_prefix', type=str, default='sample', help='prefix of saved sample file names')
+
+parser.add_argument('--lambda_feat', type=float, default=0, help='weight of feature matching loss')
+
+parser.add_argument('--iter_divide1', type=int, default=1000, help='number of iters before first subdividing to mesh')
+
 t_start = time.time()
 opt = parser.parse_args()
 print(opt)
@@ -79,10 +86,10 @@ device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
 print(device)
 
 
-def weights_init_normal(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
+# def weights_init_normal(m):
+#     classname = m.__class__.__name__
+#     if classname.find('Conv') != -1:
+#         torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
 
 
 def gradient_penalty(x, y, f):
@@ -93,29 +100,26 @@ def gradient_penalty(x, y, f):
 
     # gradient penalty
     z = Variable(z, requires_grad=True)
-    o = f(z)
+    o, _ = f(z)
     g = torch.autograd.grad(o, z, grad_outputs=torch.ones(o.size(), device=device),
                             create_graph=True, retain_graph=True)[0].view(z.size(0), -1)
     gp = ((g.norm(p=2, dim=1) - 1) ** 2).mean()
 
     return gp
 
-
-if opt.use_tensorboard:
-    os.makedirs(opt.log_dir, exist_ok=True)
-    from logger import Logger
-
-    logger = Logger(opt.log_dir)
-
 if opt.mode == 'trainGAN':
+    if opt.use_tensorboard:
+        os.makedirs(opt.log_dir, exist_ok=True)
+        from logger import Logger
+        logger = Logger(opt.log_dir)
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
     # Initialize generator and discriminator
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels, opt.model)
-    if os.path.isfile('smoothness_params_162.npy'):
-        smoothness_params = np.load('smoothness_params_162.npy')
+    if os.path.isfile('smoothness_params_42.npy'):
+        smoothness_params = np.load('smoothness_params_42.npy')
     else:
         smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces)
 
@@ -125,12 +129,14 @@ if opt.mode == 'trainGAN':
 
     # Initialize weights
     if opt.load_G is None:
-        mesh_generator.apply(weights_init_normal)
+        # mesh_generator.apply(weights_init_normal)
+        pass
     else:
         mesh_generator.load_state_dict(torch.load(opt.load_G))
 
     if opt.load_D is None:
-        discriminator.apply(weights_init_normal)
+        # discriminator.apply(weights_init_normal)
+        pass
     else:
         discriminator.load_state_dict(torch.load(opt.load_D))
 
@@ -154,12 +160,22 @@ if opt.mode == 'trainGAN':
     distances = 2.732 * torch.ones((24))
     viewpoints_fixed = nr.get_points_from_angles(distances, elevations, azimuths)
 
+    iter_divide_1 = opt.iter_divide1
     # ----------
     #  Training
     # ----------
     last_iter = opt.n_epochs * len(dataloader)
+    batches_done = 0
     for epoch in range(opt.n_epochs):
         for i, (imgs, _, viewids) in enumerate(dataloader):
+            if batches_done == iter_divide_1:
+                print('initializing subdivied mesh params...')
+                mesh_generator.init_order1()
+                if os.path.isfile('smoothness_params_devide_1.npy'):
+                    smoothness_params = np.load('smoothness_params_devide_1.npy')
+                else:
+                    smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces_1)
+
             imgs = Variable(imgs.to(device))
             imgs = imgs[:,3,:,:]
             imgs = imgs.reshape((imgs.shape[0],1,opt.img_size,opt.img_size))
@@ -189,7 +205,15 @@ if opt.mode == 'trainGAN':
             z = Variable(Tensor(np.random.normal(0, 1, (imgs.shape[0], opt.latent_dim)), device=device))
 
             # Generate a batch of images
-            vertices, faces = mesh_generator(z)
+            if batches_done < iter_divide_1:
+                vertices, faces = mesh_generator(z)
+            else:
+                vertices, faces = mesh_generator(z, 1)
+            if batches_done == iter_divide_1:
+                vertices_low, faces_low = mesh_generator(z)
+                nr.save_obj(os.path.join(opt.sample_dir, 'divide_low.obj'), vertices_low[0, :, :], faces_low[0, :, :])
+                nr.save_obj(os.path.join(opt.sample_dir, 'divide_high.obj'), vertices[0, :, :], faces[0, :, :])
+
             vertices.detach()
             faces.detach()
             mesh_renderer = M.Mesh_Renderer(vertices, faces, opt.img_size).cuda(opt.device_id)
@@ -205,15 +229,15 @@ if opt.mode == 'trainGAN':
                 gen_imgs = torch.cat((gen_imgs, labels), 1)  # images conditioned on viewpoints.
 
             # Measure discriminator's ability to classify real from generated samples
+            p_real, _ = discriminator(real_imgs)
+            p_fake, _ = discriminator(gen_imgs)
             if opt.model == 'DCGAN':
-                p_real = discriminator(real_imgs)
-                p_fake = discriminator(gen_imgs)
                 real_loss = F.binary_cross_entropy(p_real, valid)
                 fake_loss = F.binary_cross_entropy(p_fake, fake)
                 acc = torch.Tensor.float(torch.sum(p_real>0.5)+torch.sum(p_fake<0.5))/(2*imgs.shape[0])
             elif opt.model in ('WGAN', 'WGAN-GP'):
-                real_loss = -torch.mean(discriminator(real_imgs))
-                fake_loss = torch.mean(discriminator(gen_imgs))
+                real_loss = -torch.mean(p_real)
+                fake_loss = torch.mean(p_fake)
 
             skipD = False
             if opt.model == 'DCGAN':
@@ -259,7 +283,10 @@ if opt.mode == 'trainGAN':
 
                 # optimizer_G.zero_grad()
                 z = z[0:int(opt.batch_size/4), :]
-                vertices, faces = mesh_generator(z)
+                if batches_done < iter_divide_1:
+                    vertices, faces = mesh_generator(z)
+                else:
+                    vertices, faces = mesh_generator(z, 1)
                 mesh_renderer = M.Mesh_Renderer(vertices, faces, opt.img_size).cuda(opt.device_id)
                 gen_imgs1, viewids1 = mesh_renderer()
                 gen_imgs2, viewids2 = mesh_renderer()   # two random views
@@ -276,16 +303,22 @@ if opt.mode == 'trainGAN':
                         labels[ii, int(viewids[ii]), :, :] = 1.
                     gen_imgs = torch.cat((gen_imgs, labels), 1)  # images conditioned on viewpoints.
                 # Loss measures generator's ability to fool the discriminator
+                _, f_real = discriminator(real_imgs)
+                p_fake, f_fake = discriminator(gen_imgs)
                 if opt.model == 'DCGAN':
-                    g_loss = F.binary_cross_entropy(discriminator(gen_imgs), valid)
+                    g_loss = F.binary_cross_entropy(p_fake, valid)
                     losses['G/loss_fake'] = g_loss.item()
                 elif opt.model in ('WGAN', 'WGAN-GP'):
-                    g_loss = -torch.mean(discriminator(gen_imgs))
+                    g_loss = -torch.mean(p_fake)
                     losses['G/logit_fake'] = -g_loss.item()
+                # feature statistics matching loss
+                feat_matching_loss = torch.norm(torch.mean(f_real, 0) - torch.mean(f_fake, 0)) + \
+                                     torch.norm(torch.std(f_real, 0) - torch.std(f_fake, 0))
+                losses['G/featMatching_loss'] = feat_matching_loss
                 # mesh smoothness loss:
                 smth_loss = L.smoothness_loss(vertices, smoothness_params)
                 losses['G/smoothness_loss'] = smth_loss
-                g_loss_total = g_loss + opt.lambda_smth*smth_loss
+                g_loss_total = g_loss + opt.lambda_smth*smth_loss + opt.lambda_feat*feat_matching_loss
 
                 discriminator.zero_grad()
                 mesh_renderer.zero_grad()
@@ -305,7 +338,7 @@ if opt.mode == 'trainGAN':
                 t_elapse = t_now - t_start
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f]"
-                      % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), d_loss.item(), g_loss.item()))
+                      % (t_elapse, epoch, opt.n_epochs, i+1, len(dataloader), d_loss.item(), g_loss.item()))
                 if opt.use_tensorboard:
                     for tag, value in losses.items():
                         logger.scalar_summary(tag, value, batches_done)
@@ -315,7 +348,10 @@ if opt.mode == 'trainGAN':
                            normalize=True)
                 save_image(imgs_nr.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-grad.png' % batches_done), nrow=5,
                                normalize=True)
-                vertices_fixed, faces_fixed = mesh_generator(z_fixed)
+                if batches_done <= iter_divide_1:
+                    vertices_fixed, faces_fixed = mesh_generator(z_fixed)
+                else:
+                    vertices_fixed, faces_fixed = mesh_generator(z_fixed, 1)
                 mesh_renderer = M.Mesh_Renderer(vertices_fixed, faces_fixed, opt.img_size).cuda(opt.device_id)
                 gen_imgs_fixed = mesh_renderer(viewpoints_fixed)
                 save_image(gen_imgs_fixed.data, os.path.join(opt.sample_dir, 'fixed-%05d.png' % batches_done), nrow=5,
@@ -339,6 +375,10 @@ if opt.mode == 'trainGAN':
             print('lr decayed to {}'.format(opt.lr))
 
 elif opt.mode == 'trainAE':
+    if opt.use_tensorboard:
+        os.makedirs(opt.log_dir, exist_ok=True)
+        from logger import Logger
+        logger = Logger(opt.log_dir)
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
@@ -450,3 +490,25 @@ elif opt.mode == 'trainAE':
             for param_group in optimizer_E.param_groups:
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
+
+elif opt.mode == 'sampleGAN':
+    os.makedirs(opt.sample_dir, exist_ok=True)
+
+    # Initialize generator and discriminator
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+
+    try:
+        mesh_generator.load_state_dict(torch.load(opt.load_G))
+    except:
+        print('checkpoint dir of Generator is not provided!')
+        exit()
+
+    for i_batch in range(opt.n_samples//opt.batch_size):
+        print('generating the %d th sample batch, total %d batches...'%(i_batch, opt.n_samples//opt.batch_size))
+        z = Variable(Tensor(np.random.normal(0, 1, (opt.batch_size, opt.latent_dim)), device=device))
+        vertices, faces = mesh_generator(z, 1)
+        for i in range(opt.batch_size):
+            nr.save_obj(os.path.join(opt.sample_dir, '%s-%05d.obj' % (opt.sample_prefix, i_batch*opt.batch_size+i)),
+                        vertices[i, :, :], faces[i, :, :])

@@ -81,3 +81,23 @@ def iou(data1, data2):
 
 def iou_loss(data1, data2):
     return 1 - iou(data1, data2)
+
+
+def Laplacian_loss_parameters(n_vertices, faces):
+    # extract per vertex's neighboring vertices
+    # input "faces" needs to be np.array[[],[]...]
+    per_vert_neighbors = []
+    for i in range(n_vertices):
+        per_vert_neighbors.append(set())
+    for face in faces:
+        per_vert_neighbors[face[0]].add(face[1])
+        per_vert_neighbors[face[0]].add(face[2])
+        per_vert_neighbors[face[1]].add(face[0])
+        per_vert_neighbors[face[1]].add(face[2])
+        per_vert_neighbors[face[2]].add(face[0])
+        per_vert_neighbors[face[2]].add(face[1])
+    return per_vert_neighbors
+
+
+def Laplacian_loss(vertices, parameters):
+    
