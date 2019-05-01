@@ -69,13 +69,16 @@ parser.add_argument('--gp', type=float, default=10.0, help='gradient penalty for
 parser.add_argument('--class_ids', type=str, default=CLASS_IDS_ALL, help='use which object class images')
 parser.add_argument('--obj_dir', type=str, help='base sphere obj file path')
 parser.add_argument('--lambda_smth', type=float, default=0.1, help='weight for mesh smoothness loss')
+parser.add_argument('--lambda_Lap', type=float, default=0.1, help='weight for mesh Laplacian loss')
+parser.add_argument('--lambda_feat', type=float, default=0, help='weight of feature matching loss')
+parser.add_argument('--lambda_edge', type=float, default=0.1, help='weight of edge length loss')
 
 parser.add_argument('--n_samples', type=int, default=64, help='number of samples to generate and save')
 parser.add_argument('--sample_prefix', type=str, default='sample', help='prefix of saved sample file names')
 
-parser.add_argument('--lambda_feat', type=float, default=0, help='weight of feature matching loss')
-
 parser.add_argument('--iter_divide1', type=int, default=1000, help='number of iters before first subdividing to mesh')
+parser.add_argument('--iter_divide2', type=int, default=3000, help='number of iters before second subdividing to mesh')
+
 
 t_start = time.time()
 opt = parser.parse_args()
@@ -121,7 +124,12 @@ if opt.mode == 'trainGAN':
     if os.path.isfile('smoothness_params_42.npy'):
         smoothness_params = np.load('smoothness_params_42.npy')
     else:
-        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces)
+        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces, 'smoothness_params_42.npy')
+    if os.path.isfile('Laplacian_params_42.npy'):
+        Laplacian_params = np.load('Laplacian_params_42.npy')
+    else:
+        Laplacian_params = L.Laplacian_loss_parameters(mesh_generator.num_vertices, mesh_generator.faces.tolist(), \
+                                                       'Laplacian_params_42.npy')
 
     if cuda:
         mesh_generator.cuda(opt.device_id)
@@ -161,6 +169,7 @@ if opt.mode == 'trainGAN':
     viewpoints_fixed = nr.get_points_from_angles(distances, elevations, azimuths)
 
     iter_divide_1 = opt.iter_divide1
+    iter_divide_2 = opt.iter_divide2
     # ----------
     #  Training
     # ----------
@@ -169,12 +178,32 @@ if opt.mode == 'trainGAN':
     for epoch in range(opt.n_epochs):
         for i, (imgs, _, viewids) in enumerate(dataloader):
             if batches_done == iter_divide_1:
-                print('initializing subdivied mesh params...')
+                print('initializing subdivied-1 mesh params...')
                 mesh_generator.init_order1()
                 if os.path.isfile('smoothness_params_devide_1.npy'):
                     smoothness_params = np.load('smoothness_params_devide_1.npy')
                 else:
-                    smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces_1)
+                    smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces_1, \
+                                                                     'smoothness_params_devide_1.npy')
+                if os.path.isfile('Laplacian_params_devide_1.npy'):
+                    Laplacian_params = np.load('Laplacian_params_devide_1.npy')
+                else:
+                    Laplacian_params = L.Laplacian_loss_parameters(mesh_generator.num_vertices + \
+                    mesh_generator.num_vertices_1, mesh_generator.faces_1.tolist(), 'Laplacian_params_devide_1.npy')
+            if batches_done == iter_divide_2:
+                print('initializing subdivied-2 mesh params...')
+                mesh_generator.init_order2()
+                if os.path.isfile('smoothness_params_devide_2.npy'):
+                    smoothness_params = np.load('smoothness_params_devide_2.npy')
+                else:
+                    smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces_2, \
+                                                                     'smoothness_params_devide_2.npy')
+                if os.path.isfile('Laplacian_params_devide_2.npy'):
+                    Laplacian_params = np.load('Laplacian_params_devide_2.npy')
+                else:
+                    Laplacian_params = L.Laplacian_loss_parameters(mesh_generator.num_vertices + \
+                    mesh_generator.num_vertices_1 + mesh_generator.num_vertices_2, \
+                    mesh_generator.faces_2.tolist(), 'Laplacian_params_devide_2.npy')
 
             imgs = Variable(imgs.to(device))
             imgs = imgs[:,3,:,:]
@@ -207,12 +236,18 @@ if opt.mode == 'trainGAN':
             # Generate a batch of images
             if batches_done < iter_divide_1:
                 vertices, faces = mesh_generator(z)
-            else:
+            elif batches_done >= iter_divide_1 and batches_done < iter_divide_2:
                 vertices, faces = mesh_generator(z, 1)
+            elif batches_done >= iter_divide_2:
+                vertices, faces = mesh_generator(z, 2)
             if batches_done == iter_divide_1:
                 vertices_low, faces_low = mesh_generator(z)
-                nr.save_obj(os.path.join(opt.sample_dir, 'divide_low.obj'), vertices_low[0, :, :], faces_low[0, :, :])
-                nr.save_obj(os.path.join(opt.sample_dir, 'divide_high.obj'), vertices[0, :, :], faces[0, :, :])
+                nr.save_obj(os.path.join(opt.sample_dir, 'divide_low_1.obj'), vertices_low[0, :, :], faces_low[0, :, :])
+                nr.save_obj(os.path.join(opt.sample_dir, 'divide_high_1.obj'), vertices[0, :, :], faces[0, :, :])
+            if batches_done == iter_divide_2:
+                vertices_low, faces_low = mesh_generator(z, 1)
+                nr.save_obj(os.path.join(opt.sample_dir, 'divide_low_2.obj'), vertices_low[0, :, :], faces_low[0, :, :])
+                nr.save_obj(os.path.join(opt.sample_dir, 'divide_high_2.obj'), vertices[0, :, :], faces[0, :, :])
 
             vertices.detach()
             faces.detach()
@@ -285,8 +320,10 @@ if opt.mode == 'trainGAN':
                 z = z[0:int(opt.batch_size/4), :]
                 if batches_done < iter_divide_1:
                     vertices, faces = mesh_generator(z)
-                else:
+                elif batches_done >= iter_divide_1 and batches_done < iter_divide_2:
                     vertices, faces = mesh_generator(z, 1)
+                elif batches_done >= iter_divide_2:
+                    vertices, faces = mesh_generator(z, 2)
                 mesh_renderer = M.Mesh_Renderer(vertices, faces, opt.img_size).cuda(opt.device_id)
                 gen_imgs1, viewids1 = mesh_renderer()
                 gen_imgs2, viewids2 = mesh_renderer()   # two random views
@@ -318,7 +355,13 @@ if opt.mode == 'trainGAN':
                 # mesh smoothness loss:
                 smth_loss = L.smoothness_loss(vertices, smoothness_params)
                 losses['G/smoothness_loss'] = smth_loss
-                g_loss_total = g_loss + opt.lambda_smth*smth_loss + opt.lambda_feat*feat_matching_loss
+                # Laplacian loss:
+                Lap_loss, edge_loss = L.Laplacian_edge_loss(vertices, Laplacian_params)
+                losses['G/Laplacian_loss'] = Lap_loss
+                losses['G/edge_loss'] = edge_loss
+
+                g_loss_total = g_loss + opt.lambda_smth*smth_loss + opt.lambda_feat*feat_matching_loss + \
+                    opt.lambda_Lap*Lap_loss + opt.lambda_edge*edge_loss
 
                 discriminator.zero_grad()
                 mesh_renderer.zero_grad()
@@ -348,10 +391,12 @@ if opt.mode == 'trainGAN':
                            normalize=True)
                 save_image(imgs_nr.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-grad.png' % batches_done), nrow=5,
                                normalize=True)
-                if batches_done <= iter_divide_1:
+                if batches_done-1 < iter_divide_1:
                     vertices_fixed, faces_fixed = mesh_generator(z_fixed)
-                else:
+                elif batches_done-1 >= iter_divide_1 and batches_done-1 < iter_divide_2:
                     vertices_fixed, faces_fixed = mesh_generator(z_fixed, 1)
+                elif batches_done-1 >= iter_divide_2:
+                    vertices_fixed, faces_fixed = mesh_generator(z_fixed, 2)
                 mesh_renderer = M.Mesh_Renderer(vertices_fixed, faces_fixed, opt.img_size).cuda(opt.device_id)
                 gen_imgs_fixed = mesh_renderer(viewpoints_fixed)
                 save_image(gen_imgs_fixed.data, os.path.join(opt.sample_dir, 'fixed-%05d.png' % batches_done), nrow=5,
@@ -397,14 +442,16 @@ elif opt.mode == 'trainAE':
 
     # Initialize weights
     if opt.load_G is None:
-        mesh_generator.apply(weights_init_normal)
+        # mesh_generator.apply(weights_init_normal)
+        pass
     else:
         mesh_generator.load_state_dict(torch.load(opt.load_G))
 
     if opt.load_E is None:
-        encoder.apply(weights_init_normal)
+        # encoder.apply(weights_init_normal)
+        pass
     else:
-        encoder.load_state_dict(torch.load(opt.load_D))
+        encoder.load_state_dict(torch.load(opt.load_E))
 
     # Configure data loader
     dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train')
@@ -423,10 +470,14 @@ elif opt.mode == 'trainAE':
         for i, (imgs, viewpoints, _) in enumerate(dataloader):
             # Configure input
             real_imgs = Variable(imgs.to(device))
-            viewpoints = Variable(viewpoints.to(device))
+            # viewpoints = Variable(viewpoints.to(device))
 
             losses = {}
-            z = encoder(real_imgs)
+            z, p = encoder(real_imgs)
+            p = torch.squeeze(p)
+            viewpoints = nr.get_points_from_angles(2.732 * torch.ones((p.shape[0])), 30.*torch.ones((p.shape[0])),
+                                                   -p.cpu()*360)
+            viewpoints = Variable(viewpoints.to(device))
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
             mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
@@ -441,7 +492,8 @@ elif opt.mode == 'trainAE':
             losses['smoothness_loss'] = smth_loss
             iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1)
             iou_loss2 = L.iou_loss(gt_imgs2, gen_imgs2)
-            iou_loss = (iou_loss1 + iou_loss2)/2.
+            # iou_loss = (iou_loss1 + iou_loss2)/2.
+            iou_loss = iou_loss1
             losses['iou_loss'] = iou_loss
             total_loss = iou_loss + opt.lambda_smth * smth_loss
             losses['total_loss'] = total_loss
@@ -449,7 +501,7 @@ elif opt.mode == 'trainAE':
             encoder.zero_grad()
             mesh_generator.zero_grad()
             mesh_renderer.zero_grad()
-            # gen_imgs1.retain_grad()
+            gen_imgs1.retain_grad()
             total_loss.backward()
             optimizer_E.step()
             optimizer_G.step()
@@ -466,6 +518,7 @@ elif opt.mode == 'trainAE':
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [total loss: %f] [iou loss: %f]"
                       % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), total_loss.item(), iou_loss.item()))
+                print('estimated pose is %f'%(p[0].detach().cpu().numpy()*360))
                 if opt.use_tensorboard:
                     for tag, value in losses.items():
                         logger.scalar_summary(tag, value, batches_done)
@@ -473,8 +526,8 @@ elif opt.mode == 'trainAE':
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
                 save_image(gen_imgs1.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
                            normalize=True)
-                # save_image(gen_imgs1.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-grad.png' % batches_done), nrow=5,
-                #                normalize=True)
+                save_image(gen_imgs1.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-grad.png' % batches_done), nrow=5,
+                               normalize=True)
                 nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
                 print('Saved sample image to {}...'.format(opt.sample_dir))
 
@@ -490,6 +543,10 @@ elif opt.mode == 'trainAE':
             for param_group in optimizer_E.param_groups:
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
+
+        if epoch + 1 - 2 >= 0 and (epoch + 1 - opt.decay_epoch) % 2 == 0:
+            opt.lambda_smth = opt.lambda_smth * opt.decay_order
+            print('lambda_smth decayed to {}'.format(opt.lambda_smth))
 
 elif opt.mode == 'sampleGAN':
     os.makedirs(opt.sample_dir, exist_ok=True)

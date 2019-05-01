@@ -124,6 +124,13 @@ class Mesh_Generator(nn.Module):
         self.num_faces_1 = self.faces_1.shape[0]
         # nr.save_obj('divide.obj', torch.cat((self.vertices_base, self.vertices_base_1), 0), self.faces_1)
 
+        self.vertices_base_2, self.faces_2, self.vert_edges_2 = Mesh_Division(
+            torch.cat((self.vertices_base, self.vertices_base_1), 0), self.faces_1)
+        self.num_vertices_2 = self.vertices_base_2.shape[0]  # self.vertices_base_1 is only the new vertices.
+        self.num_faces_2 = self.faces_2.shape[0]
+        # nr.save_obj('divide.obj', torch.cat((self.vertices_base, self.vertices_base_1, self.vertices_base_2), 0),
+        #             self.faces_2)
+
         dim = 1024
         dim_hidden = [dim, dim * 2]
         self.fclayers = nn.Sequential(
@@ -135,6 +142,7 @@ class Mesh_Generator(nn.Module):
         self.bias_layer = nn.Linear(dim_hidden[1], self.num_vertices*3)
         # self.centroid_layer = nn.Linear(dim_hidden[1], 3)
         self.bias_layer_1 = nn.Linear(dim_hidden[1], self.num_vertices_1*3)
+        self.bias_layer_2 = nn.Linear(dim_hidden[1], self.num_vertices_2 * 3)
 
     def init_order1(self):
         for i in range(self.num_vertices_1):
@@ -145,6 +153,18 @@ class Mesh_Generator(nn.Module):
                     self.bias_layer.bias[vert_edge[1]*3:(vert_edge[1]+1)*3])/2.
             self.bias_layer_1.weight.data[i*3:(i+1)*3,:] = weight
             self.bias_layer_1.bias.data[i*3:(i+1)*3] = bias
+
+    def init_order2(self):
+        weight_base = torch.cat((self.bias_layer.weight.data, self.bias_layer_1.weight.data), 0)
+        bias_base = torch.cat((self.bias_layer.bias.data, self.bias_layer_1.bias.data), 0)
+        for i in range(self.num_vertices_2):
+            vert_edge = self.vert_edges_2[i,:]
+            weight = (weight_base[vert_edge[0]*3:(vert_edge[0]+1)*3,:] +
+                      weight_base[vert_edge[1]*3:(vert_edge[1]+1)*3,:])/2.
+            bias = (bias_base[vert_edge[0]*3:(vert_edge[0]+1)*3] +
+                    bias_base[vert_edge[1]*3:(vert_edge[1]+1)*3])/2.
+            self.bias_layer_2.weight.data[i*3:(i+1)*3,:] = weight
+            self.bias_layer_2.bias.data[i*3:(i+1)*3] = bias
 
     def forward(self, z, order=0):
         # if next(self.parameters()).is_cuda:  # better to call "CUDA_VISIBLE_DEVICES=1 python 3D-GAN.py ..."
@@ -178,41 +198,40 @@ class Mesh_Generator(nn.Module):
         # base = base*0.9      # in case 1 and -1 cause log((1+base)/(1-base)) to be inf.
         # base = 0.5*torch.log((1+base)/(1-base))
         # vertices = torch.tanh(base + bias)
-        vertices = base + bias
-        vertices = vertices * self.obj_scale
+        vertices_0 = base + bias
+        vertices_0 = vertices_0 * self.obj_scale
         # centroids = centroids[:, None, :].repeat(1, bias.shape[1], 1)
         # scales = scales[:,:, None].repeat(1, bias.shape[1], bias.shape[2])
         # vertices = vertices + centroids
 
+        vertices = vertices_0
         faces = self.faces[None,:,:].repeat(z.shape[0],1,1)
 
-        if order == 1:
+        if order >= 1:
             bias_1 = self.bias_layer_1(h)
             bias_1 = bias_1.reshape((-1, self.num_vertices_1, 3))
             base_1 = self.vertices_base_1
             base_1 = base_1[None, :, :].repeat((bias_1.shape[0], 1, 1))
 
-            # # restrict to each quarters
-            # base_1 = base_1 * 0.5
-            # sign_1 = base_1.sign()
-            # base_1 = base_1.abs()
-            # base_1 = torch.log(base_1 / (1 - base_1))
-            # centroids_1 = centroid[:, None, :].repeat(1, bias_1.shape[1], 1)
-            # centroids_1 = torch.tanh(centroids_1)
-            # scale_pos_1 = 1 - centroids_1
-            # scale_neg_1 = centroids_1 + 1
-            # vertices_1 = torch.sigmoid(base_1 + bias_1)
-            # vertices_1 = vertices_1 * sign_1
-            # vertices_1 = torch.relu(vertices_1) * scale_pos_1 - torch.relu(-vertices_1) * scale_neg_1
-            # vertices_1 = vertices_1 + centroids_1
-            # vertices_1 = vertices_1 * self.obj_scale
-
             # do not restrict to quarters
             vertices_1 = base_1 + bias_1
             vertices_1 = vertices_1 * self.obj_scale
 
-            vertices = torch.cat((vertices, vertices_1), 1)
+            vertices = torch.cat((vertices_0, vertices_1), 1)
             faces = self.faces_1[None, :, :].repeat(z.shape[0], 1, 1)
+
+        if order >= 2:
+            bias_2 = self.bias_layer_2(h)
+            bias_2 = bias_2.reshape((-1, self.num_vertices_2, 3))
+            base_2 = self.vertices_base_2
+            base_2 = base_2[None, :, :].repeat((bias_2.shape[0], 1, 1))
+
+            # do not restrict to quarters
+            vertices_2 = base_2 + bias_2
+            vertices_2 = vertices_2 * self.obj_scale
+
+            vertices = torch.cat((vertices_0, vertices_1, vertices_2), 1)
+            faces = self.faces_2[None, :, :].repeat(z.shape[0], 1, 1)
 
         return vertices, faces
 
@@ -271,12 +290,16 @@ class Encoder(nn.Module):
         self.FC = nn.Sequential(nn.Linear(dim_hidden[2] * 8 * 8, dim_hidden[3]),
                                 nn.ReLU(),
                                 nn.Linear(dim_hidden[3], dim_hidden[4]),
-                                nn.ReLU(),
-                                nn.Linear(dim_hidden[4], dim_out),
                                 nn.ReLU())
+        self.shapeLayer = nn.Sequential(nn.Linear(dim_hidden[4], dim_out),
+                                        nn.ReLU())
+        self.poseLayer = nn.Sequential(nn.Linear(dim_hidden[4], 1),
+                                       nn.Sigmoid())
 
     def forward(self, x):
         x_conv = self.convBlocks(x)
         x_conv = x_conv.reshape((x_conv.shape[0], -1))
         x_FC = self.FC(x_conv)
-        return x_FC
+        x_shape = self.shapeLayer(x_FC)
+        x_pose = self.poseLayer(x_FC)
+        return x_shape, x_pose
