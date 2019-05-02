@@ -71,16 +71,21 @@ def smoothness_loss(vertices, parameters, eps=1e-6):
     return loss
 
 
-def iou(data1, data2):
+def iou(data1, data2, p):
     # target, prediction
     axes = tuple(range(data1.ndimension())[1:])
     intersection = torch.sum(data1 * data2, dim=axes)
     union = torch.sum(data1 + data2 - data1 * data2, dim=axes)
-    return torch.sum(intersection / union) / intersection.numel()
+    if p is None:
+        loss = torch.sum(intersection / union) / intersection.numel()
+    else:
+        loss = torch.sum(p * intersection / union) / (intersection.numel()/24.)
+
+    return loss
 
 
-def iou_loss(data1, data2):
-    return 1 - iou(data1, data2)
+def iou_loss(data1, data2, p=None):
+    return 1 - iou(data1, data2, p)
 
 
 def Laplacian_loss_parameters(n_vertices, faces, fn):

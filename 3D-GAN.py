@@ -474,25 +474,27 @@ elif opt.mode == 'trainAE':
 
             losses = {}
             z, p = encoder(real_imgs)
-            p = torch.squeeze(p)
-            viewpoints = nr.get_points_from_angles(2.732 * torch.ones((p.shape[0])), 30.*torch.ones((p.shape[0])),
-                                                   -p.cpu()*360)
+            p = p.transpose(0,1).flatten()
+            z = z.repeat(24, 1)
+            azimuths = torch.zeros((z.shape[0]))
+            for ipose in range(24):
+                azimuths[(ipose*opt.batch_size):((ipose+1)*opt.batch_size)] = -ipose*15.
+
+            viewpoints = nr.get_points_from_angles(2.732 * torch.ones((z.shape[0])), 30.*torch.ones((z.shape[0])),
+                                                   azimuths)
             viewpoints = Variable(viewpoints.to(device))
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
             mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
 
             gen_imgs1 = mesh_renderer(viewpoints)
-            gen_imgs2 = mesh_renderer(torch.cat((viewpoints[opt.batch_size//2:], viewpoints[0:opt.batch_size//2]),0))
             gt_imgs1 = real_imgs[:,3,:,:]
             gt_imgs1 = gt_imgs1.reshape((opt.batch_size,1,opt.img_size,opt.img_size))
-            gt_imgs2 = torch.cat((gt_imgs1[opt.batch_size//2:], gt_imgs1[0:opt.batch_size//2]), 0)
+            gt_imgs1 = gt_imgs1.repeat(24, 1, 1, 1)
 
             smth_loss = L.smoothness_loss(vertices, smoothness_params)
             losses['smoothness_loss'] = smth_loss
-            iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1)
-            iou_loss2 = L.iou_loss(gt_imgs2, gen_imgs2)
-            # iou_loss = (iou_loss1 + iou_loss2)/2.
+            iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1, p)
             iou_loss = iou_loss1
             losses['iou_loss'] = iou_loss
             total_loss = iou_loss + opt.lambda_smth * smth_loss
@@ -518,7 +520,9 @@ elif opt.mode == 'trainAE':
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [total loss: %f] [iou loss: %f]"
                       % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), total_loss.item(), iou_loss.item()))
-                print('estimated pose is %f'%(p[0].detach().cpu().numpy()*360))
+                p = p.reshape((24,-1))
+                p_max = torch.argmax(p[:,0]).detach().cpu().numpy()
+                print('estimated pose is %f'%(p_max))
                 if opt.use_tensorboard:
                     for tag, value in losses.items():
                         logger.scalar_summary(tag, value, batches_done)

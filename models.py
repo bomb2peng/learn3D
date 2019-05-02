@@ -293,8 +293,8 @@ class Encoder(nn.Module):
                                 nn.ReLU())
         self.shapeLayer = nn.Sequential(nn.Linear(dim_hidden[4], dim_out),
                                         nn.ReLU())
-        self.poseLayer = nn.Sequential(nn.Linear(dim_hidden[4], 1),
-                                       nn.Sigmoid())
+        self.poseLayer = nn.Sequential(nn.Linear(dim_hidden[4], 24),
+                                       nn.Softmax())  # pose is a categorical distribution
 
     def forward(self, x):
         x_conv = self.convBlocks(x)
