@@ -55,9 +55,9 @@
 #--class_ids=02958343 --channels=25 --img_size=64
 
 ## training of 3D-AE
-CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=trainAE --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
---log_dir=/hd2/pengbo/mesh_reconstruction/models/log3D_AE --sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample3D_AE \
---ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_AE \
+CUDA_VISIBLE_DEVICES=2 python 3D-GAN.py --mode=trainAE --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+--sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample_temp \
+--ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt_temp \
 --obj_dir=/home/pengbo/allProjects/mesh_reconstruction/data/obj/sphere_642.obj \
 --sample_step=200 --ckpt_step=500 --n_epochs=20 --decay_epoch=2 --decay_every=1 --decay_order=0.8 --device_id=0 \
 --class_ids=02691156 --img_size=64 --lambda_smth=0.1 --latent_dim=512 --batch_size=64

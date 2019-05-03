@@ -7,13 +7,12 @@ import time
 import datetime
 import models as M
 import data_loader
-import torchvision.transforms as T
 import torch.utils.data as data
 import torch.nn.functional as F
 import os
 import neural_renderer as nr
 import losses as L
-
+import logger
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -44,9 +43,6 @@ parser.add_argument('--channels', type=int, default=3, help='number of image cha
 parser.add_argument('--sample_step', type=int, default=1, help='number of iters between image sampling')
 parser.add_argument('--sample_dir', type=str, help='dir of saved '
                                                                                                 'sample images')
-parser.add_argument('--use_tensorboard', type=str2bool, default=True, help='whether to use tensorboard for monitoring')
-parser.add_argument('--log_dir', type=str, help='dir of '
-                                                                                             'tensorboard logs')
 parser.add_argument('--log_step', type=int, default=10, help='number of iters to print and log')
 parser.add_argument('--ckpt_step', type=int, default=1000, help='number of iters for model saving')
 parser.add_argument('--ckpt_dir', type=str, help='dir of saved model '
@@ -87,13 +83,7 @@ cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
 print(device)
-
-
-# def weights_init_normal(m):
-#     classname = m.__class__.__name__
-#     if classname.find('Conv') != -1:
-#         torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
-
+ploter = logger.VisdomLinePlotter(env_name='main')
 
 def gradient_penalty(x, y, f):
     # interpolation
@@ -111,10 +101,6 @@ def gradient_penalty(x, y, f):
     return gp
 
 if opt.mode == 'trainGAN':
-    if opt.use_tensorboard:
-        os.makedirs(opt.log_dir, exist_ok=True)
-        from logger import Logger
-        logger = Logger(opt.log_dir)
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
@@ -420,10 +406,6 @@ if opt.mode == 'trainGAN':
             print('lr decayed to {}'.format(opt.lr))
 
 elif opt.mode == 'trainAE':
-    if opt.use_tensorboard:
-        os.makedirs(opt.log_dir, exist_ok=True)
-        from logger import Logger
-        logger = Logger(opt.log_dir)
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
@@ -472,8 +454,8 @@ elif opt.mode == 'trainAE':
             real_imgs = Variable(imgs.to(device))
             # viewpoints = Variable(viewpoints.to(device))
 
-            losses = {}
             z, p = encoder(real_imgs)
+            p_batch = torch.mean(p, 0)
             p = p.transpose(0,1).flatten()
             z = z.repeat(24, 1)
             azimuths = torch.zeros((z.shape[0]))
@@ -493,12 +475,10 @@ elif opt.mode == 'trainAE':
             gt_imgs1 = gt_imgs1.repeat(24, 1, 1, 1)
 
             smth_loss = L.smoothness_loss(vertices, smoothness_params)
-            losses['smoothness_loss'] = smth_loss
             iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1, p)
             iou_loss = iou_loss1
-            losses['iou_loss'] = iou_loss
-            total_loss = iou_loss + opt.lambda_smth * smth_loss
-            losses['total_loss'] = total_loss
+            prior_loss = torch.sum((p_batch-1./24)**2)
+            total_loss = iou_loss + opt.lambda_smth * smth_loss + prior_loss
 
             encoder.zero_grad()
             mesh_generator.zero_grad()
@@ -523,9 +503,10 @@ elif opt.mode == 'trainAE':
                 p = p.reshape((24,-1))
                 p_max = torch.argmax(p[:,0]).detach().cpu().numpy()
                 print('estimated pose is %f'%(p_max))
-                if opt.use_tensorboard:
-                    for tag, value in losses.items():
-                        logger.scalar_summary(tag, value, batches_done)
+
+                ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
+                ploter.plot('prior_loss', 'train', 'prior-loss', batches_done, prior_loss.item())
+                ploter.plot('total_loss', 'train', 'total-loss', batches_done, total_loss.item())
 
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
                 save_image(gen_imgs1.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
