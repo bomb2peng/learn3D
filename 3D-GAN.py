@@ -13,6 +13,7 @@ import os
 import neural_renderer as nr
 import losses as L
 import logger
+import voxelization
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -26,16 +27,15 @@ DATASET_DIRECTORY = '/hd2/pengbo/mesh_reconstruction/dataset/'
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainAE, sampleGAN]')
 parser.add_argument('--conditioned', type=int, default=0, help='whether to use conditioned GAN')
+parser.add_argument('--use_VAE', action='store_true', default=False, help='use VAE for the encoder')
 parser.add_argument('--data_dir', type=str, help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
 parser.add_argument('--n_epochs', type=int, default=30, help='number of epochs of training')
 parser.add_argument('--batch_size', type=int, default=128, help='size of the batches')
-parser.add_argument('--lr', type=float, default=0.0002, help='adam: learning rate')
+parser.add_argument('--lr', type=float, default=0.0001, help='adam: learning rate')
 parser.add_argument('--decay_epoch', type=int, default=20, help='number of epochs before lr decay')
 parser.add_argument('--decay_order', type=float, default=0.1, help='order of lr decay')
 parser.add_argument('--decay_every', type=int, default=5, help='lr decay every n epochs')
-parser.add_argument('--b1', type=float, default=0.5, help='adam: decay of first order momentum of gradient')
-parser.add_argument('--b2', type=float, default=0.999, help='adam: decay of first order momentum of gradient')
 parser.add_argument('--n_cpu', type=int, default=8, help='number of cpu threads to use during batch generation')
 parser.add_argument('--latent_dim', type=int, default=100, help='dimensionality of the latent space')
 parser.add_argument('--img_size', type=int, help='size of each image dimension')
@@ -45,8 +45,9 @@ parser.add_argument('--sample_dir', type=str, help='dir of saved '
                                                                                                 'sample images')
 parser.add_argument('--log_step', type=int, default=10, help='number of iters to print and log')
 parser.add_argument('--ckpt_step', type=int, default=1000, help='number of iters for model saving')
-parser.add_argument('--ckpt_dir', type=str, help='dir of saved model '
-                                                                                                'checkpoints')
+parser.add_argument('--ckpt_dir', type=str, help='dir of saved model checkpoints')
+parser.add_argument('--visdom_env', type=str, default=None, help='Visdom environment name')
+
 parser.add_argument('--load_G', type=str, default=None, help='path of to the loaded Generator weights')
 parser.add_argument('--load_D', type=str, default=None, help='path of to the loaded Discriminator weights')
 parser.add_argument('--load_E', type=str, default=None, help='path of to the loaded Encoder weights')
@@ -75,7 +76,6 @@ parser.add_argument('--sample_prefix', type=str, default='sample', help='prefix 
 parser.add_argument('--iter_divide1', type=int, default=1000, help='number of iters before first subdividing to mesh')
 parser.add_argument('--iter_divide2', type=int, default=3000, help='number of iters before second subdividing to mesh')
 
-
 t_start = time.time()
 opt = parser.parse_args()
 print(opt)
@@ -83,7 +83,8 @@ cuda = True if torch.cuda.is_available() else False
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
 print(device)
-ploter = logger.VisdomLinePlotter(env_name='main')
+if opt.visdom_env is not None:
+    ploter = logger.VisdomLinePlotter(env_name=opt.visdom_env)
 
 def gradient_penalty(x, y, f):
     # interpolation
@@ -140,8 +141,8 @@ if opt.mode == 'trainGAN':
 
     # Optimizers
     if opt.model in ('DCGAN', 'WGAN-GP'):
-        optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
-        optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
+        optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
+        optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr)
     elif opt.model == 'WGAN':
         optimizer_G = torch.optim.RMSprop(mesh_generator.parameters(), lr=opt.lr)
         optimizer_D = torch.optim.RMSprop(discriminator.parameters(), lr=opt.lr)
@@ -410,13 +411,13 @@ elif opt.mode == 'trainAE':
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
     # Initialize encoder and decoder
-    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
 
     if os.path.isfile('smoothness_params_642.npy'):
         smoothness_params = np.load('smoothness_params_642.npy')
     else:
-        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces)
+        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces, 'smoothness_params_642.npy')
 
     if cuda:
         mesh_generator.cuda(opt.device_id)
@@ -441,30 +442,25 @@ elif opt.mode == 'trainAE':
     data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size))
 
     # Optimizers
-    optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
-    optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
+    optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
+    optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
 
     # ----------
     #  Training
     # ----------
     last_iter = opt.n_epochs * len(dataloader)
+    lambda_KLD = 0.001
+    batches_done = opt.batches_done
     for epoch in range(opt.n_epochs):
-        for i, (imgs, viewpoints, _) in enumerate(dataloader):
+        for i, (imgs, viewpoints, _, _) in enumerate(dataloader):
             # Configure input
             real_imgs = Variable(imgs.to(device))
-            # viewpoints = Variable(viewpoints.to(device))
-
-            z, p = encoder(real_imgs)
-            p_batch = torch.mean(p, 0)
-            p = p.transpose(0,1).flatten()
-            z = z.repeat(24, 1)
-            azimuths = torch.zeros((z.shape[0]))
-            for ipose in range(24):
-                azimuths[(ipose*opt.batch_size):((ipose+1)*opt.batch_size)] = -ipose*15.
-
-            viewpoints = nr.get_points_from_angles(2.732 * torch.ones((z.shape[0])), 30.*torch.ones((z.shape[0])),
-                                                   azimuths)
             viewpoints = Variable(viewpoints.to(device))
+
+            if not opt.use_VAE:
+                z = encoder(real_imgs)
+            else:
+                z, x_mu, x_logvar = encoder(real_imgs)
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
             mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
@@ -472,13 +468,19 @@ elif opt.mode == 'trainAE':
             gen_imgs1 = mesh_renderer(viewpoints)
             gt_imgs1 = real_imgs[:,3,:,:]
             gt_imgs1 = gt_imgs1.reshape((opt.batch_size,1,opt.img_size,opt.img_size))
-            gt_imgs1 = gt_imgs1.repeat(24, 1, 1, 1)
 
             smth_loss = L.smoothness_loss(vertices, smoothness_params)
-            iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1, p)
+            iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1)
             iou_loss = iou_loss1
-            prior_loss = torch.sum((p_batch-1./24)**2)
-            total_loss = iou_loss + opt.lambda_smth * smth_loss + prior_loss
+            if not opt.use_VAE:
+                total_loss = iou_loss + opt.lambda_smth * smth_loss
+            else:
+                KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
+                # if batches_done % 500 == 0 and batches_done != 0:
+                #     lambda_KLD += 0.01
+                #     lambda_KLD = min(lambda_KLD, 0.1)
+                #     print('lambda_KLD changed: %f' % lambda_KLD)
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD
 
             encoder.zero_grad()
             mesh_generator.zero_grad()
@@ -500,13 +502,12 @@ elif opt.mode == 'trainAE':
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
                 print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [total loss: %f] [iou loss: %f]"
                       % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), total_loss.item(), iou_loss.item()))
-                p = p.reshape((24,-1))
-                p_max = torch.argmax(p[:,0]).detach().cpu().numpy()
-                print('estimated pose is %f'%(p_max))
 
+                ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
-                ploter.plot('prior_loss', 'train', 'prior-loss', batches_done, prior_loss.item())
                 ploter.plot('total_loss', 'train', 'total-loss', batches_done, total_loss.item())
+                if opt.use_VAE:
+                    ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
 
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
                 save_image(gen_imgs1.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
@@ -519,6 +520,8 @@ elif opt.mode == 'trainAE':
             if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
                 torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, '{}-E.ckpt'.format(batches_done)))
                 torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
+                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
                 print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
 
         if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
@@ -529,9 +532,9 @@ elif opt.mode == 'trainAE':
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
 
-        if epoch + 1 - 2 >= 0 and (epoch + 1 - opt.decay_epoch) % 2 == 0:
-            opt.lambda_smth = opt.lambda_smth * opt.decay_order
-            print('lambda_smth decayed to {}'.format(opt.lambda_smth))
+        # if epoch + 1 - 2 >= 0 and (epoch + 1 - opt.decay_epoch) % 2 == 0:
+        #     opt.lambda_smth = opt.lambda_smth * opt.decay_order
+        #     print('lambda_smth decayed to {}'.format(opt.lambda_smth))
 
 elif opt.mode == 'sampleGAN':
     os.makedirs(opt.sample_dir, exist_ok=True)
@@ -554,3 +557,199 @@ elif opt.mode == 'sampleGAN':
         for i in range(opt.batch_size):
             nr.save_obj(os.path.join(opt.sample_dir, '%s-%05d.obj' % (opt.sample_prefix, i_batch*opt.batch_size+i)),
                         vertices[i, :, :], faces[i, :, :])
+
+elif opt.mode == 'trainAE_GAN':
+    os.makedirs(opt.sample_dir, exist_ok=True)
+    os.makedirs(opt.ckpt_dir, exist_ok=True)
+
+    # Initialize encoder and decoder and discriminator
+    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+    discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels, opt.model)
+
+    if os.path.isfile('smoothness_params_642.npy'):
+        smoothness_params = np.load('smoothness_params_642.npy')
+    else:
+        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces)
+
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+        discriminator.cuda(opt.device_id)
+
+    # Initialize weights
+    if opt.load_G is None:
+        pass
+    else:
+        mesh_generator.load_state_dict(torch.load(opt.load_G))
+    if opt.load_E is None:
+        pass
+    else:
+        encoder.load_state_dict(torch.load(opt.load_E))
+    if opt.load_D is None:
+        pass
+    else:
+        discriminator.load_state_dict(torch.load(opt.load_D))
+
+    # Configure data loader
+    dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train')
+    dataloader = data.DataLoader(dataset_train, batch_sampler=
+    data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size))
+
+    # Optimizers
+    optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
+    optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr)
+
+    # ----------
+    #  Training
+    # ----------
+    last_iter = opt.n_epochs * len(dataloader)
+    for epoch in range(opt.n_epochs):
+        for i, (imgs, viewpoints, viewids_real) in enumerate(dataloader):
+            # Configure input
+            real_imgs = Variable(imgs.to(device))
+            viewpoints = Variable(viewpoints.to(device))
+
+            # -----------------
+            #  Train Generator and Encoder
+            # -----------------
+            z = encoder(real_imgs)
+            # Generate a batch of images
+            vertices, faces = mesh_generator(z)
+            mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
+
+            gen_imgs = mesh_renderer(viewpoints)
+            gt_imgs = real_imgs[:,3,:,:]
+            gt_imgs = gt_imgs.reshape((opt.batch_size,1,opt.img_size,opt.img_size))
+
+            smth_loss = L.smoothness_loss(vertices, smoothness_params)
+            iou_loss = L.iou_loss(gt_imgs, gen_imgs)
+
+
+            gen_imgs1, viewids1 = mesh_renderer()
+            gen_imgs2, viewids2 = mesh_renderer()  # two random views
+            imgs_newView = torch.cat((gen_imgs1, gen_imgs2), 0)
+
+            viewids = torch.cat((viewids1, viewids2), 0)
+            labels = torch.zeros((imgs_newView.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+            labels = Variable(labels.to(device))
+            for ii in range(imgs_newView.shape[0]):
+                labels[ii, int(viewids[ii]), :, :] = 1.
+            imgs_newView = torch.cat((imgs_newView, labels), 1)  # images conditioned on viewpoints.
+            p_fake, _ = discriminator(imgs_newView)
+            g_loss = -torch.mean(p_fake)
+
+            e_g_loss = iou_loss + opt.lambda_smth*smth_loss + 0.001*g_loss
+
+            discriminator.zero_grad()
+            mesh_renderer.zero_grad()
+            mesh_generator.zero_grad()
+            encoder.zero_grad()
+            e_g_loss.backward(retain_graph=True)
+            optimizer_G.step()
+            optimizer_E.step()
+
+            # Train Discriminator
+            labels = torch.zeros((imgs.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+            labels = Variable(labels.to(device))
+            for ii in range(imgs.shape[0]):
+                labels[ii, viewids_real[ii], :, :] = 1.
+            real_imgs = torch.cat((gt_imgs, labels), 1)  # images conditioned on viewpoints.
+
+            p_real, _ = discriminator(real_imgs)
+            p_fake, _ = discriminator(imgs_newView)
+            real_loss = -torch.mean(p_real)
+            fake_loss = torch.mean(p_fake)
+            gp = gradient_penalty(real_imgs.data, imgs_newView[0:opt.batch_size,:,:,:].data, discriminator)
+            d_loss = real_loss + fake_loss + opt.gp * gp
+            WassersteinD = -(real_loss + fake_loss)
+
+            d_loss.backward()
+            optimizer_D.step()
+
+            batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
+            if batches_done == 1:
+                save_image(real_imgs.data[:,0:3,:,:], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=8,
+                           normalize=True)
+                print('Saved real sample image to {}...'.format(opt.sample_dir))
+
+            if batches_done % opt.log_step == 0 or batches_done == last_iter:
+                t_now = time.time()
+                t_elapse = t_now - t_start
+                t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
+                print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [iou loss: %f] [W_D: %f]"
+                      % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), iou_loss.item(), WassersteinD.item()))
+
+                ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
+                ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
+                ploter.plot('WassersteinD', 'train', 'WassersteinD', batches_done, WassersteinD.item())
+                ploter.plot('gp', 'train', 'gradient-penalty', batches_done, gp.item())
+
+            if batches_done % opt.sample_step == 0 or batches_done == last_iter:
+                save_image(gen_imgs.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
+                           normalize=True)
+                nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
+                print('Saved sample image to {}...'.format(opt.sample_dir))
+
+            if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
+                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, '{}-E.ckpt'.format(batches_done)))
+                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
+                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
+                print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
+
+        if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
+            opt.lr = opt.lr * opt.decay_order
+            for param_group in optimizer_G.param_groups:
+                param_group['lr'] = opt.lr
+            for param_group in optimizer_E.param_groups:
+                param_group['lr'] = opt.lr
+            for param_group in optimizer_D.param_groups:
+                param_group['lr'] = opt.lr
+            print('lr decayed to {}'.format(opt.lr))
+
+        if epoch + 1 - 2 >= 0 and (epoch + 1 - opt.decay_epoch) % 2 == 0:
+            opt.lambda_smth = opt.lambda_smth * opt.decay_order
+            print('lambda_smth decayed to {}'.format(opt.lambda_smth))
+
+elif opt.mode == 'evaluation':
+
+    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+
+    # Initialize weights
+    mesh_generator.load_state_dict(torch.load(opt.load_G))
+    encoder.load_state_dict(torch.load(opt.load_E))
+    mesh_generator.eval()
+    encoder.eval()
+
+    # Configure data loader
+    dataset_test = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'test')
+    with torch.no_grad():
+        for class_id in opt.class_ids.split(','):
+            dataloader = data.DataLoader(dataset_test, batch_sampler=
+            data_loader.ShapeNet_sampler_all(dataset_test, opt.batch_size, class_id))
+            iou = 0
+            ious = {}
+            print('%s_%s has %d images, %d batches...' % (dataset_test.set_name, class_id,
+                                                       dataset_test.num_data[class_id]*24, len(dataloader)))
+            for i, (imgs, _, _, voxels) in enumerate(dataloader):
+                real_imgs = Variable(imgs.to(device))
+                z = encoder(real_imgs)
+                vertices, faces = mesh_generator(z)
+                faces = nr.vertices_to_faces(vertices, faces).data
+                faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
+                voxels_predicted = voxelization.voxelize(faces, 32, False)
+                voxels_predicted = voxels_predicted.transpose(1, 2).flip([3])
+                iou_batch = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
+                            torch.Tensor.float(0 < (voxels + voxels_predicted.cpu())).sum((1, 2, 3))
+                iou += iou_batch.sum()
+            iou /= dataset_test.num_data[class_id] * 24.
+            print('%s/iou_%s: %f' % (dataset_test.set_name, class_id, iou.item()))
+            ious['%s/iou_%s' % (dataset_test.set_name, class_id)] = iou.item()
+        iou_mean = np.mean([float(v) for v in ious.values()])
+        ious['%s/iou' % dataset_test.set_name] = iou_mean
+        print('%s/iou: %f' % (dataset_test.set_name, iou_mean))

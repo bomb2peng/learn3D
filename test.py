@@ -1,30 +1,23 @@
-import numpy as np
+# test the cuda module "voxelization"
 import torch
 import neural_renderer as nr
-import os
-from torchvision.utils import  save_image
+import voxelization
+import matplotlib.pyplot as plt
+# This import registers the 3D projection, but is otherwise unused.
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
+vertices0, faces0 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06000.obj')
+vertices1, faces1 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06500.obj')
+vertices2, faces2 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06900.obj')
+vertices = torch.cat((vertices0[None, :, :], vertices1[None, :, :], vertices2[None, :, :]), 0)
+faces = torch.cat((faces0[None, :, :], faces1[None, :, :], faces2[None, :, :]), 0)
+faces = nr.vertices_to_faces(vertices, faces)
+voxels = voxelization.voxelize(faces, 32, normalize=True)
 
-elevation = 30.
-distance = 2.732
-texture_size = 2
-renderer = nr.Renderer(camera_mode='look_at', image_size=64, viewing_angle=15)
+# and plot everything
+for i in range(voxels.shape[0]):
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    ax.voxels(voxels[i,:,:,:].squeeze().cpu().numpy(), facecolors='green', edgecolor='k')
 
-vertices, faces = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_GAN_car/random-04000.obj')
-vertices = torch.Tensor.repeat(vertices[None,:,:], (24,1,1))
-vertices = vertices*0.5
-faces = torch.Tensor.repeat(faces[None,:,:], (24,1,1))
-textures = torch.ones(faces.shape[0], faces.shape[1], texture_size, texture_size, texture_size, \
-                      3, dtype=torch.float32).cuda()
-azimuths = -15.*torch.arange(0,24)
-azimuths = torch.Tensor.float(azimuths)
-elevations = elevation*torch.ones((24))
-distances = distance*torch.ones((24))
-viewpoints = nr.get_points_from_angles(distances, elevations, azimuths)
-renderer.eye = viewpoints
-images_rgb = renderer(vertices, faces, textures, mode='rgb')
-images_silh = renderer(vertices, faces, textures, mode='silhouettes')
-images_silh = images_silh[:, None, :, :]
-images = torch.cat((images_rgb, images_silh), 1)
-save_image(images_rgb, './rendering_rgb.png', nrow=6)
-save_image(images_silh, './rendering_silh.png', nrow=6)
+plt.show()

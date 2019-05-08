@@ -1,0 +1,10 @@
+setup.py
+voxelization/__init__.py
+voxelization/voxelization.py
+voxelization.egg-info/PKG-INFO
+voxelization.egg-info/SOURCES.txt
+voxelization.egg-info/dependency_links.txt
+voxelization.egg-info/top_level.txt
+voxelization/cuda/__init__.py
+voxelization/cuda/voxelize_cuda.cpp
+voxelization/cuda/voxelize_cuda_kernel.cu
