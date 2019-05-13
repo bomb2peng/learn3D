@@ -438,8 +438,8 @@ elif opt.mode == 'trainAE':
 
     # Configure data loader
     dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train')
-    dataloader = data.DataLoader(dataset_train, batch_sampler=
-    data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size))
+    batch_sampler = data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size)
+    dataloader = data.DataLoader(dataset_train, batch_sampler=batch_sampler)
 
     # Optimizers
     optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
@@ -448,8 +448,8 @@ elif opt.mode == 'trainAE':
     # ----------
     #  Training
     # ----------
-    last_iter = opt.n_epochs * len(dataloader)
-    lambda_KLD = 0.001
+    last_iter = opt.n_epochs * len(batch_sampler) + opt.batches_done
+    lambda_KLD = 1e-4
     batches_done = opt.batches_done
     for epoch in range(opt.n_epochs):
         for i, (imgs, viewpoints, _, _) in enumerate(dataloader):
@@ -563,7 +563,7 @@ elif opt.mode == 'trainAE_GAN':
     os.makedirs(opt.ckpt_dir, exist_ok=True)
 
     # Initialize encoder and decoder and discriminator
-    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels, opt.model)
 
@@ -593,8 +593,8 @@ elif opt.mode == 'trainAE_GAN':
 
     # Configure data loader
     dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train')
-    dataloader = data.DataLoader(dataset_train, batch_sampler=
-    data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size))
+    batch_sampler = data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size)
+    dataloader = data.DataLoader(dataset_train, batch_sampler=batch_sampler)
 
     # Optimizers
     optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
@@ -604,9 +604,11 @@ elif opt.mode == 'trainAE_GAN':
     # ----------
     #  Training
     # ----------
-    last_iter = opt.n_epochs * len(dataloader)
+    last_iter = opt.n_epochs * len(batch_sampler) + opt.batches_done
+    lambda_KLD = 1e-4
+    batches_done = opt.batches_done
     for epoch in range(opt.n_epochs):
-        for i, (imgs, viewpoints, viewids_real) in enumerate(dataloader):
+        for i, (imgs, viewpoints, viewids_real, _) in enumerate(dataloader):
             # Configure input
             real_imgs = Variable(imgs.to(device))
             viewpoints = Variable(viewpoints.to(device))
@@ -614,7 +616,10 @@ elif opt.mode == 'trainAE_GAN':
             # -----------------
             #  Train Generator and Encoder
             # -----------------
-            z = encoder(real_imgs)
+            if not opt.use_VAE:
+                z = encoder(real_imgs)
+            else:
+                z, x_mu, x_logvar = encoder(real_imgs)
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
             mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
@@ -640,7 +645,20 @@ elif opt.mode == 'trainAE_GAN':
             p_fake, _ = discriminator(imgs_newView)
             g_loss = -torch.mean(p_fake)
 
-            e_g_loss = iou_loss + opt.lambda_smth*smth_loss + 0.001*g_loss
+            if epoch == 0:
+                lambda_D = 0
+            else:
+                lambda_D = 1e-3
+
+            if not opt.use_VAE:
+                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_D*g_loss
+            else:
+                KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
+                # if batches_done % 500 == 0 and batches_done != 0:
+                #     lambda_KLD += 0.01
+                #     lambda_KLD = min(lambda_KLD, 0.1)
+                #     print('lambda_KLD changed: %f' % lambda_KLD)
+                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD + lambda_D*g_loss
 
             discriminator.zero_grad()
             mesh_renderer.zero_grad()
@@ -670,7 +688,7 @@ elif opt.mode == 'trainAE_GAN':
 
             batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
             if batches_done == 1:
-                save_image(real_imgs.data[:,0:3,:,:], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=8,
+                save_image(imgs.data[:,0:3,:,:], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=8,
                            normalize=True)
                 print('Saved real sample image to {}...'.format(opt.sample_dir))
 
@@ -685,6 +703,8 @@ elif opt.mode == 'trainAE_GAN':
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
                 ploter.plot('WassersteinD', 'train', 'WassersteinD', batches_done, WassersteinD.item())
                 ploter.plot('gp', 'train', 'gradient-penalty', batches_done, gp.item())
+                if opt.use_VAE:
+                    ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
 
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
                 save_image(gen_imgs.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
@@ -696,6 +716,9 @@ elif opt.mode == 'trainAE_GAN':
                 torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, '{}-E.ckpt'.format(batches_done)))
                 torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
                 torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
+                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
                 print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
 
         if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
@@ -708,13 +731,13 @@ elif opt.mode == 'trainAE_GAN':
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
 
-        if epoch + 1 - 2 >= 0 and (epoch + 1 - opt.decay_epoch) % 2 == 0:
-            opt.lambda_smth = opt.lambda_smth * opt.decay_order
-            print('lambda_smth decayed to {}'.format(opt.lambda_smth))
+        # if epoch + 1 - 2 >= 0 and (epoch + 1 - opt.decay_epoch) % 2 == 0:
+        #     opt.lambda_smth = opt.lambda_smth * opt.decay_order
+        #     print('lambda_smth decayed to {}'.format(opt.lambda_smth))
 
 elif opt.mode == 'evaluation':
 
-    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     if cuda:
         mesh_generator.cuda(opt.device_id)
@@ -738,7 +761,10 @@ elif opt.mode == 'evaluation':
                                                        dataset_test.num_data[class_id]*24, len(dataloader)))
             for i, (imgs, _, _, voxels) in enumerate(dataloader):
                 real_imgs = Variable(imgs.to(device))
-                z = encoder(real_imgs)
+                if not opt.use_VAE:
+                    z = encoder(real_imgs)
+                else:
+                    z,_,_ = encoder(real_imgs)
                 vertices, faces = mesh_generator(z)
                 faces = nr.vertices_to_faces(vertices, faces).data
                 faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
