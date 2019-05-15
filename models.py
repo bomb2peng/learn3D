@@ -2,6 +2,7 @@ import torch.nn as nn
 import neural_renderer as nr
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 def Mesh_Division(vertices, faces):
     vertices = vertices.cpu().numpy()
@@ -311,3 +312,19 @@ class Encoder(nn.Module):
             eps = torch.randn_like(x_std)
             x_shape = x_mu + eps*x_std
             return x_shape, x_mu, x_logvar
+
+
+class feat_Discriminator(nn.Module):
+    def __init__(self, feat_dim):
+        super(feat_Discriminator, self).__init__()
+        self.hidden_dim = [256, 128]
+        self.feat_dim = feat_dim
+        self.hidden_layer0 = nn.Linear(self.feat_dim, self.hidden_dim[0])
+        self.hidden_layer1 = nn.Linear(self.hidden_dim[0], self.hidden_dim[1])
+        self.adv_layer = nn.Linear(self.hidden_dim[1], 1)
+
+    def forward(self, feat):
+        x_hidden0 = F.relu(self.hidden_layer0(feat))
+        x_hidden1 = F.relu(self.hidden_layer1(x_hidden0))
+        validity = self.adv_layer(x_hidden1)
+        return validity, x_hidden1

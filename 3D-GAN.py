@@ -14,6 +14,9 @@ import neural_renderer as nr
 import losses as L
 import logger
 import voxelization
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -779,3 +782,232 @@ elif opt.mode == 'evaluation':
         iou_mean = np.mean([float(v) for v in ious.values()])
         ious['%s/iou' % dataset_test.set_name] = iou_mean
         print('%s/iou: %f' % (dataset_test.set_name, iou_mean))
+
+elif opt.mode == 't_SNE':
+    # Initialize encoder and decoder
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
+    if cuda:
+        encoder.cuda(opt.device_id)
+
+    # Initialize weights
+    encoder.load_state_dict(torch.load(opt.load_E))
+    encoder.eval()
+
+    # Configure data loader
+    dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val')
+    dataloader = data.DataLoader(dataset_val, batch_size=opt.batch_size, shuffle=True, drop_last=True)
+
+    features = np.zeros((len(dataset_val), opt.latent_dim))
+    labels = np.zeros(len(dataset_val))
+    # ----------
+    #  forward
+    # ----------
+    for epoch in range(1):
+        for i, (imgs, _, view_ids, _) in enumerate(dataloader):
+            # Configure input
+            real_imgs = Variable(imgs.to(device))
+
+            if not opt.use_VAE:
+                z = encoder(real_imgs)
+            else:
+                z, x_mu, x_logvar = encoder(real_imgs)
+
+            z_cpu = torch.squeeze(z.cpu())
+            features[(i * opt.batch_size):min((i + 1) * opt.batch_size, len(dataset_val)),:] = \
+                z_cpu.data.numpy()
+            labels[(i * opt.batch_size):min((i + 1) * opt.batch_size, len(dataset_val))] = np.squeeze(view_ids)
+
+    print('features shape is: ', features.shape)
+    print('labels shape is: ', labels.shape)
+    print('doing PCA dimension reduction ...')
+    features_PCA = PCA(n_components=50).fit_transform(features)
+    print('doing t-SNE ...')
+    features_TSNE = TSNE(n_components=2, init='pca').fit_transform(features_PCA)
+    plt.figure()
+    plt.scatter(features_TSNE[:, 0], features_TSNE[:, 1], c=labels)
+    plt.show()
+    plt.colorbar()
+    plt.draw()
+
+elif opt.mode == 'trainAE_featGAN':
+    os.makedirs(opt.sample_dir, exist_ok=True)
+    os.makedirs(opt.ckpt_dir, exist_ok=True)
+
+    # Initialize encoder and decoder and discriminator
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+    discriminator = M.feat_Discriminator(opt.latent_dim + 24)
+
+    if os.path.isfile('smoothness_params_642.npy'):
+        smoothness_params = np.load('smoothness_params_642.npy')
+    else:
+        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces)
+
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+        discriminator.cuda(opt.device_id)
+
+    # Initialize weights
+    if opt.load_G is None:
+        pass
+    else:
+        mesh_generator.load_state_dict(torch.load(opt.load_G))
+    if opt.load_E is None:
+        pass
+    else:
+        encoder.load_state_dict(torch.load(opt.load_E))
+    if opt.load_D is None:
+        pass
+    else:
+        discriminator.load_state_dict(torch.load(opt.load_D))
+
+    # Configure data loader
+    dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train')
+    batch_sampler = data_loader.ShapeNet_Sampler_Batch(dataset_train, opt.batch_size)
+    dataloader = data.DataLoader(dataset_train, batch_sampler=batch_sampler)
+
+    # Optimizers
+    optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
+    optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr)
+
+    # ----------
+    #  Training
+    # ----------
+    last_iter = opt.n_epochs * len(batch_sampler) + opt.batches_done
+    lambda_KLD = 1e-4
+    lambda_D = 1e-4
+    batches_done = opt.batches_done
+    for epoch in range(opt.n_epochs):
+        for i, (imgs, viewpoints, viewids_real, _) in enumerate(dataloader):
+            # Configure input
+            real_imgs = Variable(imgs.to(device))
+            viewpoints = Variable(viewpoints.to(device))
+
+            # -----------------
+            #  Train Generator, Encoder and Discriminator
+            # -----------------
+            if not opt.use_VAE:
+                z = encoder(real_imgs)
+            else:
+                z, x_mu, x_logvar = encoder(real_imgs)
+            # Generate a batch of images
+            vertices, faces = mesh_generator(z)
+            mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
+
+            gen_imgs = mesh_renderer(viewpoints)
+            gt_imgs = real_imgs[:,3,:,:]
+            gt_imgs = gt_imgs.reshape((opt.batch_size,1,opt.img_size,opt.img_size))
+
+            smth_loss = L.smoothness_loss(vertices, smoothness_params)
+            iou_loss = L.iou_loss(gt_imgs, gen_imgs)
+
+            z_detach = z.detach()
+            real_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
+            fake_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
+            for ii in range(real_labels.shape[0]):
+                real_labels[ii, int(viewids_real[ii])] = 1.
+                fake_choices = np.concatenate((np.arange(int(viewids_real[ii])), np.arange(int(viewids_real[ii])+1, 24)))
+                rand_fake = np.random.choice(fake_choices)
+                fake_labels[ii, rand_fake] = 1.
+
+            real_labels = Variable(real_labels.to(device))
+            feat_real = torch.cat((z_detach, real_labels), 1)
+            fake_labels = Variable(fake_labels.to(device))
+            feat_fake = torch.cat((z_detach, fake_labels), 1)
+            p_real, _ = discriminator(feat_real)
+            p_fake, _ = discriminator(feat_fake)
+            WassersteinD = torch.mean(p_real) - torch.mean(p_fake)
+            gp = gradient_penalty(feat_real.data, feat_fake.data, discriminator)
+            d_loss = -WassersteinD + opt.gp * gp
+
+            if not opt.use_VAE:
+                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss
+            else:
+                KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
+                # if batches_done % 500 == 0 and batches_done != 0:
+                #     lambda_KLD += 0.01
+                #     lambda_KLD = min(lambda_KLD, 0.1)
+                #     print('lambda_KLD changed: %f' % lambda_KLD)
+                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD + d_loss
+
+            discriminator.zero_grad()
+            mesh_renderer.zero_grad()
+            mesh_generator.zero_grad()
+            encoder.zero_grad()
+            gen_imgs.retain_grad()
+            e_g_loss.backward()
+            optimizer_D.step()
+            optimizer_G.step()
+            optimizer_E.step()
+
+            # Train Encoder with feat_Discriminator backprop
+            if (epoch * len(dataloader) + i + 1) % opt.G_every == 0:
+                if not opt.use_VAE:
+                    z = encoder(real_imgs)
+                else:
+                    z, x_mu, x_logvar = encoder(real_imgs)
+
+                fake_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
+                for ii in range(real_labels.shape[0]):
+                    fake_choices = np.concatenate(
+                        (np.arange(int(viewids_real[ii])), np.arange(int(viewids_real[ii]) + 1, 24)))
+                    rand_fake = np.random.choice(fake_choices)
+                    fake_labels[ii, rand_fake] = 1.
+
+                fake_labels = Variable(fake_labels.to(device))
+                feat_fake = torch.cat((z_detach, fake_labels), 1)
+                p_fake, _ = discriminator(feat_fake)
+                d_loss = - lambda_D * torch.mean(p_fake)
+
+                optimizer_E.zero_grad()
+                d_loss.backward()
+                optimizer_E.step()
+
+            batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
+            if batches_done == 1:
+                save_image(imgs.data[:,0:3,:,:], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=8,
+                           normalize=True)
+                print('Saved real sample image to {}...'.format(opt.sample_dir))
+
+            if batches_done % opt.log_step == 0 or batches_done == last_iter:
+                t_now = time.time()
+                t_elapse = t_now - t_start
+                t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
+                print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [iou loss: %f] [W_D: %f]"
+                      % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), iou_loss.item(), WassersteinD.item()))
+
+                ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
+                ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
+                ploter.plot('WassersteinD', 'train', 'WassersteinD', batches_done, WassersteinD.item())
+                ploter.plot('gp', 'train', 'gradient-penalty', batches_done, gp.item())
+                if opt.use_VAE:
+                    ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
+
+            if batches_done % opt.sample_step == 0 or batches_done == last_iter:
+                save_image(gen_imgs.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
+                           normalize=True)
+                save_image(gen_imgs.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-grad.png' % batches_done),
+                           nrow=5, normalize=True)
+                nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
+                print('Saved sample image to {}...'.format(opt.sample_dir))
+
+            if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
+                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, '{}-E.ckpt'.format(batches_done)))
+                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
+                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
+                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
+                print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
+
+        if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
+            opt.lr = opt.lr * opt.decay_order
+            for param_group in optimizer_G.param_groups:
+                param_group['lr'] = opt.lr
+            for param_group in optimizer_E.param_groups:
+                param_group['lr'] = opt.lr
+            for param_group in optimizer_D.param_groups:
+                param_group['lr'] = opt.lr
+            print('lr decayed to {}'.format(opt.lr))
