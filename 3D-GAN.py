@@ -239,8 +239,6 @@ if opt.mode == 'trainGAN':
                 nr.save_obj(os.path.join(opt.sample_dir, 'divide_low_2.obj'), vertices_low[0, :, :], faces_low[0, :, :])
                 nr.save_obj(os.path.join(opt.sample_dir, 'divide_high_2.obj'), vertices[0, :, :], faces[0, :, :])
 
-            vertices.detach()
-            faces.detach()
             mesh_renderer = M.Mesh_Renderer(vertices, faces, opt.img_size).cuda(opt.device_id)
             imgs_nr, viewids = mesh_renderer()
             gen_imgs = imgs_nr.detach()
@@ -609,6 +607,7 @@ elif opt.mode == 'trainAE_GAN':
     # ----------
     last_iter = opt.n_epochs * len(batch_sampler) + opt.batches_done
     lambda_KLD = 1e-4
+    lambda_D = 1e-3
     batches_done = opt.batches_done
     for epoch in range(opt.n_epochs):
         for i, (imgs, viewpoints, viewids_real, _) in enumerate(dataloader):
@@ -617,7 +616,7 @@ elif opt.mode == 'trainAE_GAN':
             viewpoints = Variable(viewpoints.to(device))
 
             # -----------------
-            #  Train Generator and Encoder
+            #  Train Generator, Encoder and Discriminator
             # -----------------
             if not opt.use_VAE:
                 z = encoder(real_imgs)
@@ -634,60 +633,74 @@ elif opt.mode == 'trainAE_GAN':
             smth_loss = L.smoothness_loss(vertices, smoothness_params)
             iou_loss = L.iou_loss(gt_imgs, gen_imgs)
 
-
-            gen_imgs1, viewids1 = mesh_renderer()
-            gen_imgs2, viewids2 = mesh_renderer()  # two random views
-            imgs_newView = torch.cat((gen_imgs1, gen_imgs2), 0)
-
-            viewids = torch.cat((viewids1, viewids2), 0)
-            labels = torch.zeros((imgs_newView.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
-            labels = Variable(labels.to(device))
+            imgs_newView, viewids_fake = mesh_renderer()
+            imgs_newView = imgs_newView.detach()
+            labels_fake = torch.zeros((imgs_newView.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+            labels_fake = Variable(labels_fake.to(device))
+            labels_real = torch.zeros((gt_imgs.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+            labels_real = Variable(labels_real.to(device))
             for ii in range(imgs_newView.shape[0]):
-                labels[ii, int(viewids[ii]), :, :] = 1.
-            imgs_newView = torch.cat((imgs_newView, labels), 1)  # images conditioned on viewpoints.
-            p_fake, _ = discriminator(imgs_newView)
-            g_loss = -torch.mean(p_fake)
+                labels_fake[ii, int(viewids_fake[ii]), :, :] = 1.
+                labels_real[ii, int(viewids_real[ii]), :, :] = 1.
+            imgs_newView_label = torch.cat((imgs_newView, labels_fake), 1)  # images conditioned on viewpoints.
+            gt_imgs_label = torch.cat((gt_imgs, labels_real), 1)
 
-            if epoch == 0:
-                lambda_D = 0
-            else:
-                lambda_D = 1e-3
+            p_fake, _ = discriminator(imgs_newView_label)
+            p_real, _ = discriminator(gt_imgs_label)
+            WassersteinD = torch.mean(p_real) - torch.mean(p_fake)
+            gp = gradient_penalty(gt_imgs_label.data, imgs_newView_label.data, discriminator)
+            d_loss = -WassersteinD + opt.gp * gp
+            trainD = 1.
+            if WassersteinD > 100:
+                trainD = 0.
 
             if not opt.use_VAE:
-                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_D*g_loss
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + trainD * d_loss
             else:
                 KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
                 # if batches_done % 500 == 0 and batches_done != 0:
                 #     lambda_KLD += 0.01
                 #     lambda_KLD = min(lambda_KLD, 0.1)
                 #     print('lambda_KLD changed: %f' % lambda_KLD)
-                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD + lambda_D*g_loss
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD + trainD * d_loss
 
             discriminator.zero_grad()
             mesh_renderer.zero_grad()
             mesh_generator.zero_grad()
             encoder.zero_grad()
-            e_g_loss.backward(retain_graph=True)
+            gen_imgs.retain_grad()
+            total_loss.backward()
+            optimizer_D.step()
             optimizer_G.step()
             optimizer_E.step()
 
-            # Train Discriminator
-            labels = torch.zeros((imgs.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
-            labels = Variable(labels.to(device))
-            for ii in range(imgs.shape[0]):
-                labels[ii, viewids_real[ii], :, :] = 1.
-            real_imgs = torch.cat((gt_imgs, labels), 1)  # images conditioned on viewpoints.
+            # Train Generator and Encoder with Discriminator backprop
+            if (epoch * len(dataloader) + i + 1) % opt.G_every == 0 and epoch >= 1:
+                if not opt.use_VAE:
+                    z = encoder(real_imgs)
+                else:
+                    z, x_mu, x_logvar = encoder(real_imgs)
+                # Generate a batch of images
+                vertices, faces = mesh_generator(z)
+                mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
 
-            p_real, _ = discriminator(real_imgs)
-            p_fake, _ = discriminator(imgs_newView)
-            real_loss = -torch.mean(p_real)
-            fake_loss = torch.mean(p_fake)
-            gp = gradient_penalty(real_imgs.data, imgs_newView[0:opt.batch_size,:,:,:].data, discriminator)
-            d_loss = real_loss + fake_loss + opt.gp * gp
-            WassersteinD = -(real_loss + fake_loss)
+                imgs_newView, viewids_fake = mesh_renderer()
+                labels_fake = torch.zeros((imgs_newView.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+                labels_fake = Variable(labels_fake.to(device))
+                for ii in range(imgs_newView.shape[0]):
+                    labels_fake[ii, int(viewids_fake[ii]), :, :] = 1.
+                imgs_newView_label = torch.cat((imgs_newView, labels_fake), 1)  # images conditioned on viewpoints.
 
-            d_loss.backward()
-            optimizer_D.step()
+                p_fake, _ = discriminator(imgs_newView_label)
+                g_loss = - lambda_D * torch.mean(p_fake)
+                discriminator.zero_grad()
+                mesh_renderer.zero_grad()
+                mesh_generator.zero_grad()
+                encoder.zero_grad()
+                imgs_newView.retain_grad()
+                g_loss.backward()
+                optimizer_G.step()
+                optimizer_E.step()
 
             batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
             if batches_done == 1:
@@ -712,6 +725,11 @@ elif opt.mode == 'trainAE_GAN':
             if batches_done % opt.sample_step == 0 or batches_done == last_iter:
                 save_image(gen_imgs.data[:25], os.path.join(opt.sample_dir, 'random-%05d.png' % batches_done), nrow=5,
                            normalize=True)
+                save_image(gen_imgs.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-gradRecon.png' % batches_done),
+                           nrow=5, normalize=True)
+                if imgs_newView.grad is not None:
+                    save_image(imgs_newView.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-gradGAN.png' % batches_done),
+                               nrow=5, normalize=True)
                 nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
                 print('Saved sample image to {}...'.format(opt.sample_dir))
 
@@ -923,21 +941,21 @@ elif opt.mode == 'trainAE_featGAN':
             d_loss = -WassersteinD + opt.gp * gp
 
             if not opt.use_VAE:
-                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss
             else:
                 KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
                 # if batches_done % 500 == 0 and batches_done != 0:
                 #     lambda_KLD += 0.01
                 #     lambda_KLD = min(lambda_KLD, 0.1)
                 #     print('lambda_KLD changed: %f' % lambda_KLD)
-                e_g_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD + d_loss
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD*KLD + d_loss
 
             discriminator.zero_grad()
             mesh_renderer.zero_grad()
             mesh_generator.zero_grad()
             encoder.zero_grad()
             gen_imgs.retain_grad()
-            e_g_loss.backward()
+            total_loss.backward()
             optimizer_D.step()
             optimizer_G.step()
             optimizer_E.step()
