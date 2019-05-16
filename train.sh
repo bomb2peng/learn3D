@@ -65,7 +65,7 @@
 #--sample_step=500 --ckpt_step=1000 --n_epochs=50 --decay_epoch=40 --decay_every=10 --decay_order=0.1 --device_id=0 \
 #--class_ids=02691156 --img_size=64 --lambda_smth=0.001 --latent_dim=512 --visdom_env=log3D_02691156_AE-GAN --channels=25 \
 #--load_G=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE1/last-G.ckpt \
-#--load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE1/last-E.ckpt --use_VAE --G_every=1 --log_step=10
+#--load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE1/last-E.ckpt --use_VAE --G_every=1 --log_step=1
 
 ## training of 3D-AE-featGAN
 #CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=trainAE_featGAN --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
@@ -79,8 +79,8 @@
 ## batch evaluation of 3D-AE
 CUDA_VISIBLE_DEVICES=2 python 3D-GAN.py --mode=evaluation --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
 --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
---load_G=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE-GAN/1000-G.ckpt \
---load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE-GAN/1000-E.ckpt \
+--load_G=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE-GAN/2000-G.ckpt \
+--load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_02691156_AE-GAN/2000-E.ckpt \
 --device_id=0 --class_ids=02691156 --img_size=64 --latent_dim=512 --use_VAE
 
 ### t-SNE visualization
