@@ -18,6 +18,7 @@ from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import re
+import skimage.transform as skT
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -847,7 +848,7 @@ elif opt.mode == 'reconstruct':
 
     img0 = plt.imread(opt.load_im)
     img = img0.transpose((2, 0, 1))
-    img = img.astype('float32') / 255.
+    # img = img.astype('float32') / 255.    # !!! plt.imread img automatically in scale of [0,1] ...
     img = img[None,:,:,:]
     img = torch.from_numpy(img)
     real_imgs = Variable(img.to(device))
@@ -996,22 +997,18 @@ elif opt.mode == 'trainAE_featGAN':
             iou_loss = L.iou_loss(gt_imgs, gen_imgs)
 
             z_detach = z.detach()
+            z_target = torch.randn_like(z_detach)
             real_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
-            fake_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
             for ii in range(real_labels.shape[0]):
                 real_labels[ii, int(viewids_real[ii])] = 1.
-                fake_choices = np.concatenate((np.arange(int(viewids_real[ii])), np.arange(int(viewids_real[ii])+1, 24)))
-                rand_fake = np.random.choice(fake_choices)
-                fake_labels[ii, rand_fake] = 1.
 
             real_labels = Variable(real_labels.to(device))
             feat_real = torch.cat((z_detach, real_labels), 1)
-            fake_labels = Variable(fake_labels.to(device))
-            feat_fake = torch.cat((z_detach, fake_labels), 1)
+            feat_target = torch.cat((z_target, real_labels), 1)
             p_real, _ = discriminator(feat_real)
-            p_fake, _ = discriminator(feat_fake)
-            WassersteinD = torch.mean(p_real) - torch.mean(p_fake)
-            gp = gradient_penalty(feat_real.data, feat_fake.data, discriminator)
+            p_target, _ = discriminator(feat_target)
+            WassersteinD = torch.mean(p_target) - torch.mean(p_real)
+            gp = gradient_penalty(feat_target.data, feat_real.data, discriminator)
             d_loss = -WassersteinD + opt.gp * gp
 
             if not opt.use_VAE:
@@ -1041,17 +1038,14 @@ elif opt.mode == 'trainAE_featGAN':
                 else:
                     z, x_mu, x_logvar = encoder(real_imgs)
 
-                fake_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
+                real_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
                 for ii in range(real_labels.shape[0]):
-                    fake_choices = np.concatenate(
-                        (np.arange(int(viewids_real[ii])), np.arange(int(viewids_real[ii]) + 1, 24)))
-                    rand_fake = np.random.choice(fake_choices)
-                    fake_labels[ii, rand_fake] = 1.
+                    real_labels[ii, int(viewids_real[ii])] = 1.
 
-                fake_labels = Variable(fake_labels.to(device))
-                feat_fake = torch.cat((z_detach, fake_labels), 1)
-                p_fake, _ = discriminator(feat_fake)
-                d_loss = - lambda_D * torch.mean(p_fake)
+                real_labels = Variable(real_labels.to(device))
+                feat_real = torch.cat((z_detach, real_labels), 1)
+                p_real, _ = discriminator(feat_real)
+                d_loss = - lambda_D * torch.mean(p_real)
 
                 optimizer_E.zero_grad()
                 d_loss.backward()
