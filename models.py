@@ -238,7 +238,7 @@ class Mesh_Generator(nn.Module):
 
 
 class Mesh_Renderer(nn.Module):
-    def __init__(self, vertices, faces, img_size=64):
+    def __init__(self, vertices, faces, img_size=64, mode='silhouettes'):
         super(Mesh_Renderer, self).__init__()
         self.elevation = 30.
         self.distance = 2.732
@@ -247,9 +247,9 @@ class Mesh_Renderer(nn.Module):
         self.img_size = img_size
         # create textures
         texture_size = 2
-        textures = torch.ones(1, self.faces.shape[1], texture_size, texture_size, texture_size, 3, dtype=torch.float32)
+        textures = torch.ones(self.faces.shape[0], self.faces.shape[1], texture_size, texture_size, texture_size, 3, dtype=torch.float32)
         self.register_buffer('textures', textures)
-
+        self.mode = mode
         # setup renderer
         renderer = nr.Renderer(camera_mode='look_at', image_size=self.img_size, viewing_angle=15)
         self.renderer = renderer
@@ -268,8 +268,9 @@ class Mesh_Renderer(nn.Module):
 
         self.renderer.eye = viewpoints
 
-        images = self.renderer(self.vertices, self.faces, mode='silhouettes')
-        images = images.reshape((batch_size, 1, self.img_size, self.img_size))
+        images = self.renderer(self.vertices, self.faces, mode=self.mode, textures=self.textures)
+        if self.mode is 'silhouettes':
+            images = images.reshape((batch_size, 1, self.img_size, self.img_size))
         if viewpoints_flag == 1:
             return images, viewids
         else:
