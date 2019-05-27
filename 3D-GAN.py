@@ -33,6 +33,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be one of [trainGAN, trainAE, sampleGAN]')
 parser.add_argument('--conditioned', type=int, default=0, help='whether to use conditioned GAN')
 parser.add_argument('--use_VAE', action='store_true', default=False, help='use VAE for the encoder')
+parser.add_argument('--AE_Gprior', action='store_true', default=False, help='use Gaussian prior on AE codes')
 parser.add_argument('--data_dir', type=str, help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
 parser.add_argument('--n_epochs', type=int, default=30, help='number of epochs of training')
@@ -82,6 +83,8 @@ parser.add_argument('--sample_prefix', type=str, default='sample', help='prefix 
 
 parser.add_argument('--iter_divide1', type=int, default=1000, help='number of iters before first subdividing to mesh')
 parser.add_argument('--iter_divide2', type=int, default=3000, help='number of iters before second subdividing to mesh')
+parser.add_argument('--eval_flag', type=str, default='last', help='which ckpt to evaluate')
+
 
 t_start = time.time()
 opt = parser.parse_args()
@@ -515,8 +518,10 @@ elif opt.mode == 'trainAE':
             smth_loss = L.smoothness_loss(vertices, smoothness_params)
             iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1)
             iou_loss = iou_loss1
+            Gprior_loss = torch.sum(z**2)/z.shape[0]
             if not opt.use_VAE:
-                total_loss = iou_loss + opt.lambda_smth * smth_loss
+                lambda_Gprior = 1. if opt.AE_Gprior else 0.
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_Gprior * Gprior_loss
             else:
                 KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
                 # if batches_done % 500 == 0 and batches_done != 0:
@@ -548,6 +553,7 @@ elif opt.mode == 'trainAE':
 
                 ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
+                ploter.plot('Gprior_loss', 'train', 'Gpior-loss', batches_done, Gprior_loss.item())
                 ploter.plot('total_loss', 'train', 'total-loss', batches_done, total_loss.item())
                 if opt.use_VAE:
                     ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
@@ -564,6 +570,9 @@ elif opt.mode == 'trainAE':
         iou_val = eval_IoU(encoder, mesh_generator, dataset_val)
         f_log.write('batches_done: %d, validation iou: %f\r\n' % (batches_done, iou_val))
         ploter.plot('IoU_loss', 'voxel_IoU_val', 'IoU-loss', batches_done, iou_val)
+        torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+        torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+        print('Saved latest model checkpoints to {}...'.format(opt.ckpt_dir))
         if iou_val > iou_best:
             iou_best = iou_val
             torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'best-E.ckpt'))
@@ -824,8 +833,8 @@ elif opt.mode == 'evaluation':
     # ckptE = os.path.join(opt.ckpt_dir, batches[argmax] + '-E.ckpt')
     # print('using %s' % ckptG)
 
-    ckptG = os.path.join(opt.ckpt_dir, 'best-G.ckpt')
-    ckptE = os.path.join(opt.ckpt_dir, 'best-E.ckpt')
+    ckptG = os.path.join(opt.ckpt_dir, opt.eval_flag+'-G.ckpt')
+    ckptE = os.path.join(opt.ckpt_dir, opt.eval_flag+'-E.ckpt')
     # Initialize weights
     mesh_generator.load_state_dict(torch.load(ckptG))
     encoder.load_state_dict(torch.load(ckptE))
@@ -909,10 +918,14 @@ elif opt.mode == 't_SNE':
 
     print('features shape is: ', features.shape)
     print('labels shape is: ', labels.shape)
-    print('doing PCA dimension reduction ...')
-    features_PCA = PCA(n_components=50).fit_transform(features)
+    if features.shape[1] > 50:
+        print('doing PCA dimension reduction ...')
+        features_PCA = PCA(n_components=50).fit_transform(features)
     print('doing t-SNE ...')
-    features_TSNE = TSNE(n_components=2, init='pca').fit_transform(features_PCA)
+    if features.shape[1] > 50:
+        features_TSNE = TSNE(n_components=2, init='pca').fit_transform(features_PCA)
+    else:
+        features_TSNE = TSNE(n_components=2, init='pca').fit_transform(features)
     plt.figure()
     plt.scatter(features_TSNE[:, 0], features_TSNE[:, 1], c=labels)
     plt.show()
@@ -969,7 +982,7 @@ elif opt.mode == 'trainAE_featGAN':
     # ----------
     last_iter = opt.n_epochs * len(batch_sampler) + opt.batches_done
     lambda_KLD = 1e-4
-    lambda_D = 1e-1
+    lambda_D = 1
     batches_done = opt.batches_done
     iou_best = 0.
     for epoch in range(opt.n_epochs):
@@ -1043,13 +1056,39 @@ elif opt.mode == 'trainAE_featGAN':
                     real_labels[ii, int(viewids_real[ii])] = 1.
 
                 real_labels = Variable(real_labels.to(device))
-                feat_real = torch.cat((z_detach, real_labels), 1)
+                feat_real = torch.cat((z, real_labels), 1)
                 p_real, _ = discriminator(feat_real)
                 d_loss = - lambda_D * torch.mean(p_real)
 
-                optimizer_E.zero_grad()
-                d_loss.backward()
+                # Generate a batch of images
+                vertices, faces = mesh_generator(z)
+                mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
+
+                gen_imgs = mesh_renderer(viewpoints)
+                gt_imgs = real_imgs[:, 3, :, :]
+                gt_imgs = gt_imgs.reshape((opt.batch_size, 1, opt.img_size, opt.img_size))
+
+                smth_loss = L.smoothness_loss(vertices, smoothness_params)
+                iou_loss = L.iou_loss(gt_imgs, gen_imgs)
+
+                if not opt.use_VAE:
+                    total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss
+                else:
+                    KLD = -0.5 * torch.sum(1 + x_logvar - x_mu.pow(2) - x_logvar.exp())
+                    # if batches_done % 500 == 0 and batches_done != 0:
+                    #     lambda_KLD += 0.01
+                    #     lambda_KLD = min(lambda_KLD, 0.1)
+                    #     print('lambda_KLD changed: %f' % lambda_KLD)
+                    total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_KLD * KLD + d_loss
+
+                encoder.zero_grad()
+                discriminator.zero_grad()
+                mesh_generator.zero_grad()
+                mesh_renderer.zero_grad()
+                gen_imgs.retain_grad()
+                total_loss.backward()
                 optimizer_E.step()
+                optimizer_G.step()
 
             batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
             if batches_done == 1:
@@ -1079,20 +1118,15 @@ elif opt.mode == 'trainAE_featGAN':
                 nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
                 print('Saved sample image to {}...'.format(opt.sample_dir))
 
-            if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
-                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, '{}-E.ckpt'.format(batches_done)))
-                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, '{}-G.ckpt'.format(batches_done)))
-                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, '{}-D.ckpt'.format(batches_done)))
-                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
-                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
-                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
-                print('Saved model checkpoints to {}...'.format(opt.ckpt_dir))
-
 
         # validation on val dataset after each epoch
         iou_val = eval_IoU(encoder, mesh_generator, dataset_val)
         f_log.write('batches_done: %d, validation iou: %f\r\n' % (batches_done, iou_val))
         ploter.plot('IoU_loss', 'voxel_IoU_val', 'IoU-loss', batches_done, iou_val)
+        torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+        torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+        torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
+        print('Saved latest model checkpoints to {}...'.format(opt.ckpt_dir))
         if iou_val > iou_best:
             iou_best = iou_val
             torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'best-E.ckpt'))
@@ -1107,6 +1141,136 @@ elif opt.mode == 'trainAE_featGAN':
             for param_group in optimizer_E.param_groups:
                 param_group['lr'] = opt.lr
             for param_group in optimizer_D.param_groups:
+                param_group['lr'] = opt.lr
+            print('lr decayed to {}'.format(opt.lr))
+
+    f_log.close()
+
+elif opt.mode == 'trainAE3DMM':
+    os.makedirs(opt.sample_dir, exist_ok=True)
+    os.makedirs(opt.ckpt_dir, exist_ok=True)
+    f_log = open(os.path.join(opt.ckpt_dir, 'val_log.txt'), 'a+')
+
+    # Initialize encoder and decoder
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=False)
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+
+    if os.path.isfile('smoothness_params_642.npy'):
+        smoothness_params = np.load('smoothness_params_642.npy')
+    else:
+        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces, 'smoothness_params_642.npy')
+
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+
+    # Initialize weights
+    if opt.load_G is None:
+        # mesh_generator.apply(weights_init_normal)
+        pass
+    else:
+        mesh_generator.load_state_dict(torch.load(opt.load_G))
+
+    if opt.load_E is None:
+        # encoder.apply(weights_init_normal)
+        pass
+    else:
+        encoder.load_state_dict(torch.load(opt.load_E))
+
+    # Configure data loader
+    dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
+    dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
+    dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
+
+    # Optimizers
+    optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
+    optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
+
+    # ----------
+    #  Training
+    # ----------
+    last_iter = opt.n_epochs * len(dataloader) + opt.batches_done
+    batches_done = opt.batches_done
+    iou_best = 0
+    lambda_3DMMprior = 1.
+    for epoch in range(opt.n_epochs):
+        for i, (imgs, viewpoints, _, _) in enumerate(dataloader):
+            # Configure input
+            real_imgs = Variable(imgs.to(device))
+            viewpoints = Variable(viewpoints.to(device))
+
+            z = encoder(real_imgs)
+            # Generate a batch of images
+            vertices, faces = mesh_generator(z)
+            mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
+
+            gen_imgs1 = mesh_renderer(viewpoints)
+            gt_imgs1 = real_imgs[:,3,:,:]
+            gt_imgs1 = gt_imgs1.reshape((gt_imgs1.shape[0],1,opt.img_size,opt.img_size))
+
+            smth_loss = L.smoothness_loss(vertices, smoothness_params)
+            iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1)
+            iou_loss = iou_loss1
+            z_mu = torch.mean(z, 0)
+            z_deMu = z - z_mu.repeat((z.shape[0], 1))
+            z_sigma = torch.mm(z_deMu, z_deMu.t())
+            # MMprior_loss = torch.sum(z_mu**2) + torch.sum((z_sigma.triu(1)/z.shape[0])**2)
+            MMprior_loss = torch.sum(z**2)/z.shape[0] + torch.sum((z_sigma.triu(1)/z.shape[0])**2)
+
+            total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_3DMMprior * MMprior_loss
+
+            encoder.zero_grad()
+            mesh_generator.zero_grad()
+            mesh_renderer.zero_grad()
+            gen_imgs1.retain_grad()
+            total_loss.backward()
+            optimizer_E.step()
+            optimizer_G.step()
+
+            batches_done = opt.batches_done + epoch * len(dataloader) + i + 1
+            if batches_done == 1:
+                save_image(real_imgs.data[:,0:3,:,:], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=8,
+                           normalize=True)
+                print('Saved real sample image to {}...'.format(opt.sample_dir))
+
+            if batches_done % opt.log_step == 0 or batches_done == last_iter:
+                t_now = time.time()
+                t_elapse = t_now - t_start
+                t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
+                print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [total loss: %f] [iou loss: %f]"
+                      % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), total_loss.item(), iou_loss.item()))
+
+                ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
+                ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
+                ploter.plot('MMprior_loss', 'train', 'MMpior-loss', batches_done, MMprior_loss.item())
+                ploter.plot('total_loss', 'train', 'total-loss', batches_done, total_loss.item())
+
+            if batches_done % opt.sample_step == 0 or batches_done == last_iter:
+                save_image(gen_imgs1.data[:min(25, gen_imgs1.shape[0])], os.path.join(opt.sample_dir,
+                        'random-%05d.png' % batches_done), nrow=5, normalize=True)
+                save_image(gen_imgs1.grad[:min(25, gen_imgs1.shape[0])], os.path.join(opt.sample_dir,
+                        'random-%05d-grad.png' % batches_done), nrow=5, normalize=True)
+                nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
+                print('Saved sample image to {}...'.format(opt.sample_dir))
+
+        # validation on val dataset after each epoch
+        iou_val = eval_IoU(encoder, mesh_generator, dataset_val)
+        f_log.write('batches_done: %d, validation iou: %f\r\n' % (batches_done, iou_val))
+        ploter.plot('IoU_loss', 'voxel_IoU_val', 'IoU-loss', batches_done, iou_val)
+        torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+        torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+        print('Saved latest model checkpoints to {}...'.format(opt.ckpt_dir))
+        if iou_val > iou_best:
+            iou_best = iou_val
+            torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'best-E.ckpt'))
+            torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'best-G.ckpt'))
+            print('Saved best model checkpoints to {}...'.format(opt.ckpt_dir))
+
+        if epoch + 1 - opt.decay_epoch >= 0 and (epoch + 1 - opt.decay_epoch) % opt.decay_every == 0:
+            opt.lr = opt.lr * opt.decay_order
+            for param_group in optimizer_G.param_groups:
+                param_group['lr'] = opt.lr
+            for param_group in optimizer_E.param_groups:
                 param_group['lr'] = opt.lr
             print('lr decayed to {}'.format(opt.lr))
 
