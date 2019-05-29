@@ -34,6 +34,7 @@ parser.add_argument('--mode', type=str, default='trainGAN', help='mode can be on
 parser.add_argument('--conditioned', type=int, default=0, help='whether to use conditioned GAN')
 parser.add_argument('--use_VAE', action='store_true', default=False, help='use VAE for the encoder')
 parser.add_argument('--AE_Gprior', action='store_true', default=False, help='use Gaussian prior on AE codes')
+parser.add_argument('--AE_featMatch', action='store_true', default=False, help='use feature matching on AE codes')
 parser.add_argument('--data_dir', type=str, help='dir of dataset')
 parser.add_argument('--crop_size', type=int, default=178, help='size of center crop for celebA')
 parser.add_argument('--n_epochs', type=int, default=30, help='number of epochs of training')
@@ -498,7 +499,7 @@ elif opt.mode == 'trainAE':
     batches_done = opt.batches_done
     iou_best = 0
     for epoch in range(opt.n_epochs):
-        for i, (imgs, viewpoints, _, _) in enumerate(dataloader):
+        for i, (imgs, viewpoints, viewids, _) in enumerate(dataloader):
             # Configure input
             real_imgs = Variable(imgs.to(device))
             viewpoints = Variable(viewpoints.to(device))
@@ -519,9 +520,18 @@ elif opt.mode == 'trainAE':
             iou_loss1 = L.iou_loss(gt_imgs1, gen_imgs1)
             iou_loss = iou_loss1
             Gprior_loss = torch.sum(z**2)/z.shape[0]
+            featMatch_loss = 0
+            for viewid in range(24):
+                idx = (viewids == viewid).nonzero().to(device).squeeze()
+                z_idx = z.index_select(0, idx)
+                if len(z_idx) is not 0:
+                    featMatch_loss += torch.sum((torch.mean(z_idx, 0))**2)
+
             if not opt.use_VAE:
                 lambda_Gprior = 1. if opt.AE_Gprior else 0.
-                total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_Gprior * Gprior_loss
+                lambda_featMatch = 1. if opt.AE_featMatch else 0.
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + lambda_Gprior * Gprior_loss \
+                + lambda_featMatch * featMatch_loss
             else:
                 KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
                 # if batches_done % 500 == 0 and batches_done != 0:
@@ -554,6 +564,7 @@ elif opt.mode == 'trainAE':
                 ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
                 ploter.plot('Gprior_loss', 'train', 'Gpior-loss', batches_done, Gprior_loss.item())
+                ploter.plot('featMatch_loss', 'train', 'featMatch-loss', batches_done, featMatch_loss.item())
                 ploter.plot('total_loss', 'train', 'total-loss', batches_done, total_loss.item())
                 if opt.use_VAE:
                     ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
@@ -982,7 +993,7 @@ elif opt.mode == 'trainAE_featGAN':
     # ----------
     last_iter = opt.n_epochs * len(batch_sampler) + opt.batches_done
     lambda_KLD = 1e-4
-    lambda_D = 1
+    lambda_D = 1.
     batches_done = opt.batches_done
     iou_best = 0.
     for epoch in range(opt.n_epochs):
@@ -1025,7 +1036,8 @@ elif opt.mode == 'trainAE_featGAN':
             d_loss = -WassersteinD + opt.gp * gp
 
             if not opt.use_VAE:
-                total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss
+                Gprior_loss = torch.sum(z ** 2) / z.shape[0]
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss + Gprior_loss
             else:
                 KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
                 # if batches_done % 500 == 0 and batches_done != 0:
@@ -1072,7 +1084,8 @@ elif opt.mode == 'trainAE_featGAN':
                 iou_loss = L.iou_loss(gt_imgs, gen_imgs)
 
                 if not opt.use_VAE:
-                    total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss
+                    Gprior_loss = torch.sum(z ** 2) / z.shape[0]
+                    total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss + Gprior_loss
                 else:
                     KLD = -0.5 * torch.sum(1 + x_logvar - x_mu.pow(2) - x_logvar.exp())
                     # if batches_done % 500 == 0 and batches_done != 0:
@@ -1107,6 +1120,7 @@ elif opt.mode == 'trainAE_featGAN':
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
                 ploter.plot('WassersteinD', 'train', 'WassersteinD', batches_done, WassersteinD.item())
                 ploter.plot('gp', 'train', 'gradient-penalty', batches_done, gp.item())
+                ploter.plot('Gprior_loss', 'train', 'Gpior-loss', batches_done, Gprior_loss.item())
                 if opt.use_VAE:
                     ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
 

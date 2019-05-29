@@ -294,8 +294,9 @@ class Encoder(nn.Module):
                                 nn.ReLU(),
                                 nn.Linear(dim_hidden[3], dim_hidden[4]),
                                 nn.ReLU())
-        self.shapeLayer = nn.Sequential(nn.Linear(dim_hidden[4], dim_out),
-                                        nn.ReLU())
+        # self.shapeLayer = nn.Sequential(nn.Linear(dim_hidden[4], dim_out),
+        #                                 nn.ReLU())
+        self.shapeLayer = nn.Linear(dim_hidden[4], dim_out)
         self.muLayer = nn.Linear(dim_hidden[4], dim_out)
         self.logvarLayer = nn.Linear(dim_hidden[4], dim_out)
 
@@ -327,5 +328,45 @@ class feat_Discriminator(nn.Module):
     def forward(self, feat):
         x_hidden0 = F.relu(self.hidden_layer0(feat))
         x_hidden1 = F.relu(self.hidden_layer1(x_hidden0))
+        # x_hidden0 = self.hidden_layer0(feat)
+        # x_hidden1 = self.hidden_layer1(x_hidden0)
         validity = self.adv_layer(x_hidden1)
         return validity, x_hidden1
+
+class Encoder_temp(nn.Module):
+    def __init__(self, dim_in=4, dim_out=512, dim1=64, dim2=1024, VAE=False):
+        super(Encoder_temp, self).__init__()
+        self.dim_in = dim_in
+        self.dim_out = dim_out
+        self.VAE = VAE
+        dim_hidden = [dim1 * 2 ** 0, dim1 * 2 ** 1, dim1 * 2 ** 2, dim2, dim2]
+        self.convBlocks = nn.Sequential(nn.Conv2d(dim_in, dim_hidden[0], 5, stride=2, padding=2),
+                                        nn.ReLU(),
+                                        nn.Conv2d(dim_hidden[0], dim_hidden[1], 5, stride=2, padding=2),
+                                        nn.ReLU(),
+                                        nn.Conv2d(dim_hidden[1], dim_hidden[2], 5, stride=2, padding=2),
+                                        nn.ReLU())
+        self.FC = nn.Sequential(nn.Linear(dim_hidden[2] * 8 * 8, dim_hidden[3]),
+                                nn.ReLU(),
+                                nn.Linear(dim_hidden[3], dim_hidden[4]),
+                                nn.ReLU())
+        self.shapeLayer = nn.Sequential(nn.Linear(dim_hidden[4], dim_out),
+                                        nn.ReLU())
+        # self.shapeLayer = nn.Linear(dim_hidden[4], dim_out)
+        self.muLayer = nn.Linear(dim_hidden[4], dim_out)
+        self.logvarLayer = nn.Linear(dim_hidden[4], dim_out)
+
+    def forward(self, x):
+        x_conv = self.convBlocks(x)
+        x_conv = x_conv.reshape((x_conv.shape[0], -1))
+        x_FC = self.FC(x_conv)
+        if not self.VAE:
+            x_shape = self.shapeLayer(x_FC)
+            return x_shape
+        else:
+            x_mu = self.muLayer(x_FC)
+            x_logvar = self.logvarLayer(x_FC)
+            x_std = torch.exp(0.5*x_logvar)
+            eps = torch.randn_like(x_std)
+            x_shape = x_mu + eps*x_std
+            return x_shape, x_mu, x_logvar
