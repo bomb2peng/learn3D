@@ -323,15 +323,16 @@ class feat_Discriminator(nn.Module):
         self.feat_dim = feat_dim
         self.hidden_layer0 = nn.Linear(self.feat_dim, self.hidden_dim[0])
         self.hidden_layer1 = nn.Linear(self.hidden_dim[0], self.hidden_dim[1])
-        self.adv_layer = nn.Linear(self.hidden_dim[1], 1)
+        # self.adv_layer = nn.Linear(self.hidden_dim[1], 1)
+        self.digit_layer = nn.Linear(self.hidden_dim[1], 24)
 
     def forward(self, feat):
         x_hidden0 = F.relu(self.hidden_layer0(feat))
         x_hidden1 = F.relu(self.hidden_layer1(x_hidden0))
-        # x_hidden0 = self.hidden_layer0(feat)
-        # x_hidden1 = self.hidden_layer1(x_hidden0)
-        validity = self.adv_layer(x_hidden1)
-        return validity, x_hidden1
+        # validity = self.adv_layer(x_hidden1)
+        logdigit = F.log_softmax(self.digit_layer(x_hidden1), dim=1)
+        # return validity, x_hidden1
+        return logdigit
 
 class Encoder_temp(nn.Module):
     def __init__(self, dim_in=4, dim_out=512, dim1=64, dim2=1024, VAE=False):

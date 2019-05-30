@@ -951,7 +951,7 @@ elif opt.mode == 'trainAE_featGAN':
     # Initialize encoder and decoder and discriminator
     encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
-    discriminator = M.feat_Discriminator(opt.latent_dim + 24)
+    discriminator = M.feat_Discriminator(opt.latent_dim)
 
     if os.path.isfile('smoothness_params_642.npy'):
         smoothness_params = np.load('smoothness_params_642.npy')
@@ -1021,19 +1021,9 @@ elif opt.mode == 'trainAE_featGAN':
             iou_loss = L.iou_loss(gt_imgs, gen_imgs)
 
             z_detach = z.detach()
-            z_target = torch.randn_like(z_detach)
-            real_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
-            for ii in range(real_labels.shape[0]):
-                real_labels[ii, int(viewids_real[ii])] = 1.
-
-            real_labels = Variable(real_labels.to(device))
-            feat_real = torch.cat((z_detach, real_labels), 1)
-            feat_target = torch.cat((z_target, real_labels), 1)
-            p_real, _ = discriminator(feat_real)
-            p_target, _ = discriminator(feat_target)
-            WassersteinD = torch.mean(p_target) - torch.mean(p_real)
-            gp = gradient_penalty(feat_target.data, feat_real.data, discriminator)
-            d_loss = -WassersteinD + opt.gp * gp
+            real_labels = Variable(viewids_real.to(device))
+            logdigit = discriminator(z_detach)
+            d_loss = F.nll_loss(logdigit, real_labels)
 
             if not opt.use_VAE:
                 Gprior_loss = torch.sum(z ** 2) / z.shape[0]
@@ -1063,14 +1053,11 @@ elif opt.mode == 'trainAE_featGAN':
                 else:
                     z, x_mu, x_logvar = encoder(real_imgs)
 
-                real_labels = torch.zeros((z.shape[0], 24), dtype=torch.float)
-                for ii in range(real_labels.shape[0]):
-                    real_labels[ii, int(viewids_real[ii])] = 1.
-
-                real_labels = Variable(real_labels.to(device))
-                feat_real = torch.cat((z, real_labels), 1)
-                p_real, _ = discriminator(feat_real)
-                d_loss = - lambda_D * torch.mean(p_real)
+                logdigit = discriminator(z)
+                # target = torch.ones((z.shape[0], 24), dtype=torch.float)*torch.log(torch.Tensor([1./24.]))
+                # target = Variable(target.to(device))
+                # Adv_loss = torch.sum((target - logdigit)**2)/z.shape[0]
+                Adv_loss = -torch.sum(1./24. * logdigit)/z.shape[0]
 
                 # Generate a batch of images
                 vertices, faces = mesh_generator(z)
@@ -1085,7 +1072,7 @@ elif opt.mode == 'trainAE_featGAN':
 
                 if not opt.use_VAE:
                     Gprior_loss = torch.sum(z ** 2) / z.shape[0]
-                    total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss + Gprior_loss
+                    total_loss = iou_loss + opt.lambda_smth * smth_loss + Adv_loss + Gprior_loss
                 else:
                     KLD = -0.5 * torch.sum(1 + x_logvar - x_mu.pow(2) - x_logvar.exp())
                     # if batches_done % 500 == 0 and batches_done != 0:
@@ -1113,14 +1100,14 @@ elif opt.mode == 'trainAE_featGAN':
                 t_now = time.time()
                 t_elapse = t_now - t_start
                 t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
-                print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [iou loss: %f] [W_D: %f]"
-                      % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), iou_loss.item(), WassersteinD.item()))
+                print("[Time %s] [Epoch %d/%d] [Batch %d/%d] [iou loss: %f] [D_loss: %f]"
+                      % (t_elapse, epoch, opt.n_epochs, i, len(dataloader), iou_loss.item(), d_loss.item()))
 
                 ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
-                ploter.plot('WassersteinD', 'train', 'WassersteinD', batches_done, WassersteinD.item())
-                ploter.plot('gp', 'train', 'gradient-penalty', batches_done, gp.item())
                 ploter.plot('Gprior_loss', 'train', 'Gpior-loss', batches_done, Gprior_loss.item())
+                ploter.plot('D_loss', 'train', 'D-loss', batches_done, d_loss.item())
+                ploter.plot('Adv_loss', 'train', 'Adv-loss', batches_done, Adv_loss.item())
                 if opt.use_VAE:
                     ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
 
