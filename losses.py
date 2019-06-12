@@ -149,15 +149,7 @@ def Laplacian_edge_loss(vertices, parameters):
     mean_len = torch.mean(edge_lens, 1, keepdim=True)
     edge_loss = torch.sum((edge_lens - mean_len.repeat((1, edge_lens.shape[1])))**2)
     return Lap_loss, edge_loss
-#
-# def evaluate_iou(self, images, voxels):
-#     vertices, faces = self.decoder(self.encoder(images))
-#     faces = neural_renderer.vertices_to_faces(vertices, faces).data
-#     faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
-#     voxels_predicted = voxelization.voxelize(faces, 32, False)
-#     voxels_predicted = voxels_predicted.transpose((0, 2, 1, 3))[:, :, :, ::-1]
-#     iou = (voxels * voxels_predicted).sum((1, 2, 3)) / (0 < (voxels + voxels_predicted)).sum((1, 2, 3))
-#     return iou
+
 
 def guassian_kernel(source, target, kernel_mul=2.0, kernel_num=5, fix_sigma=None):
     '''

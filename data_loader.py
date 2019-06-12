@@ -13,41 +13,6 @@ import tqdm
 import neural_renderer as nr
 import skimage.transform as skT
 
-class ImageFolderSingle(data.Dataset):
-    # This data class returns images in a single folder and split it into train-test parts
-    def __init__(self, data_dir, train_perc, mode, transform, label):
-        # label should be one int, [0, 1]
-        self.data_dir = data_dir
-        self.train_perc = train_perc
-        self.mode = mode
-        self.transform = transform
-        self.label = label
-        self.img_paths = []
-        for f in glob.glob(os.path.join(data_dir, '*.jpg')):
-            self.img_paths.append(f)
-        for f in glob.glob(os.path.join(data_dir, '*.png')):
-            self.img_paths.append(f)
-
-    def __len__(self):
-        N = len(self.img_paths)
-        if self.mode is 'train':
-            return int(np.ceil(N * self.train_perc))
-        elif self.mode is 'test':
-            return N - int(np.ceil(N * self.train_perc))
-        else:
-            exit('ImageFolderSingle mode must be one of [train test]')
-
-    def __getitem__(self, index):
-        N = len(self.img_paths)
-        if self.mode is 'train':
-            index_ = index
-        elif self.mode is 'test':
-            index_ = index + int(np.ceil(N * self.train_perc))
-        else:
-            exit('GAN_data mode must be one of [train test]')
-        image = Image.open(self.img_paths[index_])
-        return self.transform(image), torch.FloatTensor(1).fill_(self.label)
-
 
 class ShapeNet(data.Dataset):
     def __init__(self, directory=None, class_ids=None, set_name=None, img_resize=64):
