@@ -19,6 +19,7 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import re
 import skimage.transform as skT
+import pandas as pd
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -59,6 +60,7 @@ parser.add_argument('--load_G', type=str, default=None, help='path of to the loa
 parser.add_argument('--load_D', type=str, default=None, help='path of to the loaded Discriminator weights')
 parser.add_argument('--load_E', type=str, default=None, help='path of to the loaded Encoder weights')
 parser.add_argument('--load_im', type=str, default=None, help='image to load to reconstruct')
+parser.add_argument('--load_im1', type=str, default=None, help='another image to load to interplolate')
 parser.add_argument('--N_generated', type=int, default=1000, help='number of generated images')
 parser.add_argument('--dir_generated', type=str, default=None, help='saving dir of to be generated images')
 parser.add_argument('--train_perc', type=float, default=0.5, help='percentage of training split')
@@ -78,6 +80,7 @@ parser.add_argument('--lambda_Lap', type=float, default=0.1, help='weight for me
 parser.add_argument('--lambda_feat', type=float, default=0, help='weight of feature matching loss')
 parser.add_argument('--lambda_edge', type=float, default=0.1, help='weight of edge length loss')
 parser.add_argument('--lambda_KLD', type=float, default=1e-4, help='weight of KL-divergence')
+parser.add_argument('--lambda_Gprior', type=float, default=1., help='weight of Gaussian prior term')
 
 parser.add_argument('--n_samples', type=int, default=64, help='number of samples to generate and save')
 parser.add_argument('--sample_prefix', type=str, default='sample', help='prefix of saved sample file names')
@@ -907,13 +910,18 @@ elif opt.mode == 't_SNE':
     dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val')
     dataloader = data.DataLoader(dataset_val, batch_size=opt.batch_size, shuffle=True, drop_last=True)
 
-    features = np.zeros((len(dataset_val), opt.latent_dim))
-    labels = np.zeros(len(dataset_val))
+    # features = np.zeros((len(dataset_val), opt.latent_dim))
+    # labels = np.zeros(len(dataset_val))
+    n_batches = int(1e6)
+    features = np.zeros((min(opt.batch_size*n_batches, len(dataset_val)), opt.latent_dim))
+    labels = np.zeros(min(opt.batch_size*n_batches, len(dataset_val)))
     # ----------
     #  forward
     # ----------
     for epoch in range(1):
         for i, (imgs, _, view_ids, _) in enumerate(dataloader):
+            if  i == n_batches:
+                break
             # Configure input
             real_imgs = Variable(imgs.to(device))
 
@@ -938,10 +946,20 @@ elif opt.mode == 't_SNE':
     else:
         features_TSNE = TSNE(n_components=2, init='pca').fit_transform(features)
     plt.figure()
-    plt.scatter(features_TSNE[:, 0], features_TSNE[:, 1], c=labels)
-    plt.show()
-    plt.colorbar()
-    plt.draw()
+    plt.switch_backend('QT4Agg')
+    plt.scatter(features_TSNE[:, 0], features_TSNE[:, 1], c=labels, s=2)
+    plt.axis('off')
+    fig = plt.gcf()
+    fig.set_size_inches(15.0 / 3, 10.0 / 3)  # dpi = 300, output = 1500*1000 pixels
+    # plt.gca().xaxis.set_major_locator(plt.NullLocator())
+    # plt.gca().yaxis.set_major_locator(plt.NullLocator())
+    plt.subplots_adjust(top=0.95, bottom=0.05, right=0.95, left=0.05, hspace=0, wspace=0)
+    plt.margins(0.01, 0.01)
+    sep = re.split('/', opt.load_E)
+    fn = sep[-2] + '_' + sep[-1]
+    plt.savefig('/hd2/pengbo/mesh_reconstruction/models/img_embedings/'+fn+'.png', dpi=300, pad_inches=0)
+    plt.savefig('/hd2/pengbo/mesh_reconstruction/models/img_embedings/'+fn+'.pdf', dpi=300, pad_inches=0)
+    # plt.show()
 
 elif opt.mode == 'trainAE_featGAN':
     os.makedirs(opt.sample_dir, exist_ok=True)
@@ -1027,7 +1045,7 @@ elif opt.mode == 'trainAE_featGAN':
 
             if not opt.use_VAE:
                 Gprior_loss = torch.sum(z ** 2) / z.shape[0]
-                total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss + Gprior_loss
+                total_loss = iou_loss + opt.lambda_smth * smth_loss + d_loss + opt.lambda_Gprior*Gprior_loss
             else:
                 KLD = -0.5 * torch.sum(1+x_logvar-x_mu.pow(2)-x_logvar.exp())
                 # if batches_done % 500 == 0 and batches_done != 0:
@@ -1054,10 +1072,10 @@ elif opt.mode == 'trainAE_featGAN':
                     z, x_mu, x_logvar = encoder(real_imgs)
 
                 logdigit = discriminator(z)
-                # target = torch.ones((z.shape[0], 24), dtype=torch.float)*torch.log(torch.Tensor([1./24.]))
-                # target = Variable(target.to(device))
-                # Adv_loss = torch.sum((target - logdigit)**2)/z.shape[0]
-                Adv_loss = -torch.sum(1./24. * logdigit)/z.shape[0]
+                target = torch.ones((z.shape[0], 24), dtype=torch.float)*torch.log(torch.Tensor([1./24.]))
+                target = Variable(target.to(device))
+                Adv_loss = torch.sum((target - logdigit)**2)/z.shape[0]
+                # Adv_loss = -torch.sum(1./24. * logdigit)/z.shape[0]
 
                 # Generate a batch of images
                 vertices, faces = mesh_generator(z)
@@ -1072,7 +1090,7 @@ elif opt.mode == 'trainAE_featGAN':
 
                 if not opt.use_VAE:
                     Gprior_loss = torch.sum(z ** 2) / z.shape[0]
-                    total_loss = iou_loss + opt.lambda_smth * smth_loss + Adv_loss + Gprior_loss
+                    total_loss = iou_loss + opt.lambda_smth * smth_loss + Adv_loss + opt.lambda_Gprior*Gprior_loss
                 else:
                     KLD = -0.5 * torch.sum(1 + x_logvar - x_mu.pow(2) - x_logvar.exp())
                     # if batches_done % 500 == 0 and batches_done != 0:
@@ -1107,7 +1125,8 @@ elif opt.mode == 'trainAE_featGAN':
                 ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
                 ploter.plot('Gprior_loss', 'train', 'Gpior-loss', batches_done, Gprior_loss.item())
                 ploter.plot('D_loss', 'train', 'D-loss', batches_done, d_loss.item())
-                ploter.plot('Adv_loss', 'train', 'Adv-loss', batches_done, Adv_loss.item())
+                if 'Adv_loss' in locals():
+                    ploter.plot('Adv_loss', 'train', 'Adv-loss', batches_done, Adv_loss.item())
                 if opt.use_VAE:
                     ploter.plot('KLD', 'train', 'KLD', batches_done, KLD.item())
 
@@ -1116,6 +1135,11 @@ elif opt.mode == 'trainAE_featGAN':
                            normalize=True)
                 save_image(gen_imgs.grad[:25], os.path.join(opt.sample_dir, 'random-%05d-grad.png' % batches_done),
                            nrow=5, normalize=True)
+                # torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+                # torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+                # torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
+                print('Saved latest model checkpoints to {}...'.format(opt.ckpt_dir))
+
                 nr.save_obj(os.path.join(opt.sample_dir, 'random-%05d.obj' % batches_done), vertices[0,:,:], faces[0,:,:])
                 print('Saved sample image to {}...'.format(opt.sample_dir))
 
@@ -1276,3 +1300,116 @@ elif opt.mode == 'trainAE3DMM':
             print('lr decayed to {}'.format(opt.lr))
 
     f_log.close()
+
+elif opt.mode == 'interpolation':
+    os.makedirs(opt.sample_dir, exist_ok=True)
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+    # Initialize weights
+    mesh_generator.load_state_dict(torch.load(opt.load_G))
+    encoder.load_state_dict(torch.load(opt.load_E))
+    mesh_generator.eval()
+    encoder.eval()
+
+    img0 = plt.imread(opt.load_im)
+    img = img0.transpose((2, 0, 1))
+    # img = img.astype('float32') / 255.    # !!! plt.imread img automatically in scale of [0,1] ...
+    img = img[None,:,:,:]
+    img = torch.from_numpy(img)
+    real_imgs = Variable(img.to(device))
+    if not opt.use_VAE:
+        z0 = encoder(real_imgs)
+    else:
+        z0, _, _ = encoder(real_imgs)  # use mean encoding when evaluating
+    z0 = z0.repeat((24, 1))
+
+    img1 = plt.imread(opt.load_im1)
+    img = img1.transpose((2, 0, 1))
+    # img = img.astype('float32') / 255.    # !!! plt.imread img automatically in scale of [0,1] ...
+    img = img[None, :, :, :]
+    img = torch.from_numpy(img)
+    real_imgs = Variable(img.to(device))
+    if not opt.use_VAE:
+        z1 = encoder(real_imgs)
+    else:
+        z1, _, _ = encoder(real_imgs)  # use mean encoding when evaluating
+    z1 = z1.repeat((24, 1))
+
+    N = 5   # number of interpolation points
+    azimuths = -15. * torch.arange(0, 24)
+    azimuths = torch.Tensor.float(azimuths)
+    elevations = 30. * torch.ones((24))
+    distances = 2.732 * torch.ones((24))
+    viewpoints_fixed = nr.get_points_from_angles(distances, elevations, azimuths)
+    fn0 = os.path.splitext(os.path.basename(opt.load_im))[0]
+    (fn, id0) = re.split('_', fn0)[0:2]
+    fn1 = os.path.splitext(os.path.basename(opt.load_im1))[0]
+    (_, id1) = re.split('_', fn1)[0:2]
+    plt.imsave(os.path.join(opt.sample_dir, fn0 + '.png'), img0)
+    plt.imsave(os.path.join(opt.sample_dir, fn1 + '.png'), img1)
+    for i in range(N+1):
+        z = z0 + (z1 - z0)*i/N
+        vertices, faces = mesh_generator(z)
+
+        mesh_renderer = M.Mesh_Renderer(vertices, faces, opt.img_size, 'rgb').cuda(opt.device_id)
+        gen_imgs_fixed = mesh_renderer(viewpoints_fixed)
+
+        save_image(gen_imgs_fixed.data, os.path.join(opt.sample_dir, fn+('_%s_%s_%d.png' % (id0, id1, i))), nrow=5,
+                   normalize=True)
+        nr.save_obj(os.path.join(opt.sample_dir, fn+('_%s_%s_%d.obj' % (id0, id1, i))), vertices[0, :, :], faces[0, :, :])
+    print('Saved reconstruction results of %s to %s...' % (fn, opt.sample_dir))
+
+elif opt.mode == 'MMD':
+    # Initialize encoder and decoder
+    encoder = M.Encoder(4, dim_out=opt.latent_dim, VAE=opt.use_VAE)
+    if cuda:
+        encoder.cuda(opt.device_id)
+
+    # Initialize weights
+    encoder.load_state_dict(torch.load(opt.load_E))
+    encoder.eval()
+
+    # Configure data loader
+    dataset_test = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'test')
+    dataloader = data.DataLoader(dataset_test, batch_size=opt.batch_size, shuffle=False, drop_last=False)
+
+    # features = np.zeros((len(dataset_val), opt.latent_dim))
+    # labels = np.zeros(len(dataset_val))
+    n_batches = 24*4 #int(1e6)
+    features = torch.zeros((min(opt.batch_size*n_batches, len(dataset_test)), opt.latent_dim)).to(device)
+    # ----------
+    #  forward
+    # ----------
+    for epoch in range(1):
+        for i, (imgs, _, view_ids, _) in enumerate(dataloader):
+            if  i == n_batches:
+                break
+            # Configure input
+            real_imgs = Variable(imgs.to(device))
+
+            if not opt.use_VAE:
+                z = encoder(real_imgs)
+            else:
+                z, x_mu, x_logvar = encoder(real_imgs)
+
+            features[(i * opt.batch_size):min((i + 1) * opt.batch_size, len(dataset_test)),:] = torch.squeeze(z.data)
+
+    features = features.reshape((int(features.shape[0]/24), 24, features.shape[1]))
+    features = features.transpose(1,0)
+    print('features shape is: ', features.shape)
+
+    MMDs = torch.zeros(int(24*23/2)).to(device)
+    k = 0
+    for i in range(24):
+        for j in range(i+1, 24):
+            sliceA = features[i,:,:]
+            sliceB = features[j,:,:]
+            MMD = L.mmd_rbf(sliceA, sliceB)
+            # print('processed %d/%d, MMD is %f' % (k+1, int(24*23/2), MMD))
+            MMDs[k] = MMD
+            k += 1
+    meanMMD = torch.mean(MMDs)
+    print('%s meanMMD is: %f' % (opt.class_ids, meanMMD.item()))
