@@ -4,40 +4,33 @@
 # 04530566--vessel
 
 # batch runs
-#ids="02691156 02828884 02933112 02958343 03001627 03211117 03636649 03691459 04090263 04256520 04379243 04401088 04530566"
-ids="02691156"
+ids="02691156 02828884 02933112 02958343 03001627 03211117 03636649 03691459 04090263 04256520 04379243 04401088 04530566"
+#ids="02691156 02828884"
 for j in ${ids}
 do
-##    training of 3D-AE
-#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=trainAE --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
-#    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample3D_temp \
-#    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp  \
-#    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
-#    --sample_step=500 --log_step=10 --ckpt_step=1  --batch_size=128 --device_id=0 --class_ids=${j} \
-#    --img_size=64 --lambda_smth=1e-3 --latent_dim=512 \
-#    --n_epochs=1 --decay_epoch=15 --decay_every=5 --decay_order=0.1 --visdom_env=main \
-#    --AE_Gprior
-##    --load_G=/hd2/pengbo/mesh_reconstruction/models/AE529/ckpt3D_${j}_AE529/last-G.ckpt \
-##    --load_E=/hd2/pengbo/mesh_reconstruction/models/AE529/ckpt3D_${j}_AE529/last-E.ckpt
+    # training of 3D-AE-featGAN
+    CUDA_VISIBLE_DEVICES=0 python 3D-GAN.py --mode=train --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/woG616/sample3D_${j}_woG616 \
+    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/woG616/ckpt3D_${j}_woG616 \
+    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
+    --sample_step=500 --ckpt_step=500 --n_iters=20000 --decay_batch=15000 --decay_every=5000 --decay_order=0.1 --device_id=0 \
+    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_Gprior=0. --lambda_adv=1. --latent_dim=512 \
+    --visdom_env=log3D-woG616_${j} --G_every=2
+#    --load_G=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN604/ckpt3D_${j}_AEfeatGAN604/last-G.ckpt \
+#    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN604/ckpt3D_${j}_AEfeatGAN604/last-E.ckpt \
+#    --load_D=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN604/ckpt3D_${j}_AEfeatGAN604/last-D.ckpt
 
 ## Evaluations
 #    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=evaluation --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
 #    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
 #    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp \
 #    --device_id=0 --class_ids=${j} --img_size=64 --latent_dim=512 --eval_flag=last
-
-#    # training of 3D-AE-featGAN
-#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=trainAE_featGAN --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
-#    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/sample3D_temp \
-#    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp \
-#    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
-#    --sample_step=500 --n_epochs=20 --decay_epoch=15 --decay_every=10 --decay_order=0.1 --device_id=0 \
-#    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --latent_dim=512 --visdom_env=main \
-#    --G_every=1 --lambda_Gprior=1
-##    --load_G=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN604/ckpt3D_${j}_AEfeatGAN604/last-G.ckpt \
-##    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN604/ckpt3D_${j}_AEfeatGAN604/last-E.ckpt \
-##    --load_D=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN604/ckpt3D_${j}_AEfeatGAN604/last-D.ckpt
-
+#
+#    ## MMD between features of different poses
+#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=MMD --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+#    --n_epochs=1 --device_id=0 \
+#    --class_ids=${j} --img_size=64 --latent_dim=512 \
+#    --load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp/last-E.ckpt
 
 #    ## reconstruction results on an image
 #    for i in {0..9}
@@ -64,14 +57,8 @@ do
 #        --load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp/last-E.ckpt
 #    done
 
-    ## t-SNE visualization
-    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=t_SNE --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
-    --n_epochs=1 --device_id=0 \
-    --class_ids=${j} --img_size=64 --latent_dim=512 \
-    --load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp/last-E.ckpt
-
-#    ## MMD between features of different poses
-#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=MMD --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+#    ## t-SNE visualization
+#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=t_SNE --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
 #    --n_epochs=1 --device_id=0 \
 #    --class_ids=${j} --img_size=64 --latent_dim=512 \
 #    --load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp/last-E.ckpt
