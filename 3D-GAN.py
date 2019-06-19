@@ -68,6 +68,7 @@ parser.add_argument('--lambda_Gprior', type=float, default=0., help='weight of G
 parser.add_argument('--lambda_adv', type=float, default=0., help='weight of adversary loss')
 
 parser.add_argument('--eval_flag', type=str, default='last', help='which ckpt to evaluate')
+parser.add_argument('--prefix', type=str, help='prefix id of the experimental run')
 
 
 t_start = time.time()
@@ -80,11 +81,11 @@ if opt.visdom_env is not None:
     ploter = logger.VisdomLinePlotter(env_name=opt.visdom_env)
 
 
-def eval_IoU(encoder, mesh_generator, dataset_val):
+def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.split(',')):
     mesh_generator.eval()
     encoder.eval()
     with torch.no_grad():
-        for class_id in opt.class_ids.split(','):
+        for class_id in class_ids:
             loader_val = data.DataLoader(dataset_val, batch_sampler=
             data_loader.ShapeNet_sampler_all(dataset_val, opt.batch_size, class_id))
             iou = 0
@@ -161,6 +162,7 @@ if opt.mode == 'train':
     batches_done = opt.batches_done
     if batches_done != 0:       # continued training
         ious = []
+        f_log.seek(0, os.SEEK_SET)
         for line in f_log.readlines():
             sep = re.split('[ ,\n]', line)  # try out the split regexp
             ious.append(float(sep[5]))
@@ -210,7 +212,7 @@ if opt.mode == 'train':
     # ----------
     #  Training
     # ----------
-    last_iter = opt.n_iters
+    last_iter = opt.n_iters + batches_done
     lambda_D = 1.
 
     while True:
@@ -331,20 +333,30 @@ if opt.mode == 'train':
     ploter.save()
 
 elif opt.mode == 'evaluation':
+    f_log = open(os.path.join(opt.ckpt_dir, 'test_log.txt'), 'a+')
+    f_log.write(str(datetime.datetime.now()))
+    print(opt.class_ids + ', mean')
+    f_log.write(opt.class_ids + ', mean')
     encoder = M.Encoder(4, dim_out=opt.latent_dim)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     if cuda:
         mesh_generator.cuda(opt.device_id)
         encoder.cuda(opt.device_id)
-
-    ckptG = os.path.join(opt.ckpt_dir, opt.eval_flag+'-G.ckpt')
-    ckptE = os.path.join(opt.ckpt_dir, opt.eval_flag+'-E.ckpt')
-    # Initialize weights
-    mesh_generator.load_state_dict(torch.load(ckptG))
-    encoder.load_state_dict(torch.load(ckptE))
-    # Configure data loader
-    dataset_test = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'test')
-    eval_IoU(encoder, mesh_generator, dataset_test)
+    ious = []
+    for class_id in opt.class_ids.split(','):
+        subdir = 'ckpt3D_' + class_id + '_' + opt.prefix
+        ckptG = os.path.join(opt.ckpt_dir, subdir, opt.eval_flag+'-G.ckpt')
+        ckptE = os.path.join(opt.ckpt_dir, subdir, opt.eval_flag+'-E.ckpt')
+        # Initialize weights
+        mesh_generator.load_state_dict(torch.load(ckptG))
+        encoder.load_state_dict(torch.load(ckptE))
+        # Configure data loader
+        dataset_test = data_loader.ShapeNet(opt.data_dir, [class_id], 'test')
+        ious.append(eval_IoU(encoder, mesh_generator, dataset_test, [class_id]))
+    ious.append(np.mean(ious))
+    print(str(ious))
+    f_log.write(str(ious))
+    f_log.close()
 
 elif opt.mode == 'reconstruct':
     os.makedirs(opt.sample_dir, exist_ok=True)
