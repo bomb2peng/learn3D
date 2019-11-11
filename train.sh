@@ -10,12 +10,12 @@ for j in ${ids}
 do
     # training of 3D-AE-featGAN
     CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=train --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
-    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/sample3D_${j}_AEfeatGAN616 \
-    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616 \
+    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN/sample3D_${j}_AEfeatGAN616 \
+    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN/ckpt3D_${j}_AEfeatGAN616 \
     --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
     --sample_step=500 --ckpt_step=500 --n_iters=20000 --decay_batch=40000 --decay_every=5000 --decay_order=0.1 --device_id=0 \
     --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_Gprior=1. --lambda_adv=1. --latent_dim=512 \
-    --visdom_env=log3D-AEfeatGAN616_${j} --G_every=2
+    --visdom_env=log3D-AEfeatGAN_${j} --G_every=2
 #    --batches_done=20000 \
 #    --load_G=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-G.ckpt \
 #    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-E.ckpt \
