@@ -332,6 +332,198 @@ if opt.mode == 'train':
     f_log.close()
     ploter.save()
 
+if opt.mode == 'trainCVPR19':
+    os.makedirs(opt.sample_dir, exist_ok=True)
+    os.makedirs(opt.ckpt_dir, exist_ok=True)
+    f_log = open(os.path.join(opt.ckpt_dir, 'val_log.txt'), 'a+')
+    batches_done = opt.batches_done
+    if batches_done != 0:  # continued training
+        ious = []
+        f_log.seek(0, os.SEEK_SET)
+        for line in f_log.readlines():
+            sep = re.split('[ ,\n]', line)  # try out the split regexp
+            ious.append(float(sep[5]))
+        iou_best = max(ious)  # previous best evaluation result
+    else:
+        iou_best = 0.
+
+    # Initialize encoder and decoder and discriminator
+    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+    discriminator = M.DCGAN_Discriminator(opt.img_size, opt.channels)
+
+    if os.path.isfile('smoothness_params_642.npy'):
+        smoothness_params = np.load('smoothness_params_642.npy')
+    else:
+        smoothness_params = L.smoothness_loss_parameters(mesh_generator.faces)
+
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+        discriminator.cuda(opt.device_id)
+
+    # Initialize weights
+    if opt.load_G is None:
+        pass
+    else:
+        mesh_generator.load_state_dict(torch.load(opt.load_G))
+    if opt.load_E is None:
+        pass
+    else:
+        encoder.load_state_dict(torch.load(opt.load_E))
+    if opt.load_D is None:
+        pass
+    else:
+        discriminator.load_state_dict(torch.load(opt.load_D))
+
+    # Configure data loader
+    dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
+    dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
+    dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
+
+    # Optimizers
+    optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
+    optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
+    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=opt.lr)
+
+    # ----------
+    #  Training
+    # ----------
+    last_iter = opt.n_iters + batches_done
+
+    while True:
+        for _, (imgs, viewpoints, viewids_real, _) in enumerate(dataloader):
+            batches_done = batches_done + 1
+            # Configure input
+            real_imgs = Variable(imgs.to(device))
+            viewpoints = Variable(viewpoints.to(device))
+
+            # -----------------
+            #  Train Generator, Encoder with Discriminator backprop
+            # -----------------
+            z = encoder(real_imgs)
+            # Generate a batch of images
+            vertices, faces = mesh_generator(z)
+            mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
+
+            gen_imgs = mesh_renderer(viewpoints)
+            gt_imgs = real_imgs[:, 3, :, :]
+            gt_imgs = gt_imgs.reshape((gt_imgs.shape[0], 1, opt.img_size, opt.img_size))
+
+            smth_loss = L.smoothness_loss(vertices, smoothness_params)
+            iou_loss = L.iou_loss(gt_imgs, gen_imgs)
+
+            imgs_newView, viewids_fake = mesh_renderer(viewidN = torch.Tensor.float(viewids_real).to(device))  # random new views
+            labels_fake = torch.zeros((imgs_newView.shape[0], 24, opt.img_size, opt.img_size),
+                                      dtype=torch.float)
+            labels_fake = Variable(labels_fake.to(device))
+            labels_real = torch.zeros((gen_imgs.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+            labels_real = Variable(labels_real.to(device))
+
+            for ii in range(imgs_newView.shape[0]):
+                labels_fake[ii, int(viewids_fake[ii]), :, :] = 1.
+                labels_real[ii, int(viewids_real[ii]), :, :] = 1.
+            imgs_newView_label = torch.cat((imgs_newView, labels_fake), 1)  # images conditioned on viewpoints.
+            gen_imgs_label = torch.cat((gen_imgs, labels_real), 1)
+
+            fake = Variable(torch.Tensor(imgs.shape[0], 1).fill_(0.0).to(device), requires_grad=False)
+            real = Variable(torch.Tensor(imgs.shape[0], 1).fill_(1.0).to(device), requires_grad=False)
+
+            if batches_done % opt.G_every != 0:  # Train Discriminator
+                p_fake, _ = discriminator(imgs_newView_label.detach())
+                p_real, _ = discriminator(gen_imgs_label.detach())
+                d_loss = (F.binary_cross_entropy(p_fake, fake) + F.binary_cross_entropy(p_real, real))/2.
+                total_loss = iou_loss + opt.lambda_smth*smth_loss + d_loss
+
+                discriminator.zero_grad()
+                mesh_renderer.zero_grad()
+                mesh_generator.zero_grad()
+                encoder.zero_grad()
+                total_loss.backward()
+                optimizer_D.step()
+                optimizer_G.step()
+                optimizer_E.step()
+            else:       # Train Generator
+                p_fake, _ = discriminator(imgs_newView_label)
+                adv_loss = F.binary_cross_entropy(p_fake, real)
+                total_loss = iou_loss + opt.lambda_smth*smth_loss + opt.lambda_adv*adv_loss
+
+                discriminator.zero_grad()
+                mesh_renderer.zero_grad()
+                mesh_generator.zero_grad()
+                encoder.zero_grad()
+                total_loss.backward()
+                optimizer_G.step()
+                optimizer_E.step()
+
+            if batches_done == 1:
+                save_image(imgs.data[:, 0:3, :, :], os.path.join(opt.sample_dir, 'real_samples.png'), nrow=8,
+                           normalize=True)
+                print('Saved real sample image to {}...'.format(opt.sample_dir))
+
+            if batches_done % opt.log_step == 0 or batches_done == last_iter:
+                t_now = time.time()
+                t_elapse = t_now - t_start
+                t_elapse = str(datetime.timedelta(seconds=t_elapse))[:-7]
+                print("[Time %s] [Batch %d/%d] [iou loss: %f]"
+                      % (t_elapse, batches_done, last_iter, iou_loss.item()))
+
+                ploter.plot('IoU_loss', 'train', 'IoU-loss', batches_done, iou_loss.item())
+                ploter.plot('smoothness_loss', 'train', 'smoothness-loss', batches_done, smth_loss.item())
+                if 'd_loss' in locals():
+                    ploter.plot('D_loss', 'train', 'D-loss', batches_done, d_loss.item())
+                if 'adv_loss' in locals():
+                    ploter.plot('Adv_loss', 'train', 'Adv-loss', batches_done, adv_loss.item())
+
+            if batches_done % opt.sample_step == 0 or batches_done == last_iter:
+                save_image(gen_imgs.data[:min(25, gen_imgs.shape[0])], os.path.join(opt.sample_dir,
+                                                                                    '%05d-gen.png' % batches_done),
+                           nrow=5, normalize=True)
+                save_image(gt_imgs.data[:min(25, gt_imgs.shape[0])], os.path.join(opt.sample_dir,
+                                                                                  '%05d-gt.png' % batches_done), nrow=5,
+                           normalize=True)
+                nr.save_obj(os.path.join(opt.sample_dir, '%05d.obj' % batches_done), vertices[0, :, :], faces[0, :, :])
+                print('Saved sample image to {}...'.format(opt.sample_dir))
+
+            # validation on val dataset
+            if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
+                iou_val = eval_IoU(encoder, mesh_generator, dataset_val)
+                MMD_val = eval_MMD(encoder, dataset_val)
+                f_log.write('batches_done: %d, validation iou: %f\r\n' % (batches_done, iou_val))
+                ploter.plot('IoU_loss', 'voxel_IoU_val', 'IoU-loss', batches_done, iou_val)
+                ploter.plot('IoU_loss', 'MMD_val', 'IoU-loss', batches_done, MMD_val)
+                torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
+                torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
+                torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
+                print('Saved latest model checkpoints to {}...'.format(opt.ckpt_dir))
+                if iou_val > iou_best:
+                    iou_best = iou_val
+                    torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'best-E.ckpt'))
+                    torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'best-G.ckpt'))
+                    torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'best-D.ckpt'))
+                    print('Saved best model checkpoints to {}...'.format(opt.ckpt_dir))
+
+            if batches_done >= opt.decay_batch and (batches_done - opt.decay_batch) % opt.decay_every == 0:
+                opt.lr = opt.lr * opt.decay_order
+                for param_group in optimizer_G.param_groups:
+                    param_group['lr'] = opt.lr
+                for param_group in optimizer_E.param_groups:
+                    param_group['lr'] = opt.lr
+                for param_group in optimizer_D.param_groups:
+                    param_group['lr'] = opt.lr
+                print('lr decayed to {}'.format(opt.lr))
+
+            if batches_done == last_iter:  # reached maximum iteration and break out for loop.
+                break
+        if batches_done == last_iter:  # reached maximum iteration and break out while loop.
+            break
+
+    f_log.close()
+    ploter.save()
+
+
+
+
 elif opt.mode == 'evaluation':
     f_log = open(os.path.join(opt.ckpt_dir, 'test_log.txt'), 'a+')
     f_log.write(str(datetime.datetime.now()))

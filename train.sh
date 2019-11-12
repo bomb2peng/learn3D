@@ -4,22 +4,34 @@
 # 04530566--vessel
 
 # batch runs
-ids="02691156 02828884 02933112 02958343 03001627 03211117 03636649 03691459 04090263 04256520 04379243 04401088 04530566"
-#ids="02691156 02828884"
+#ids="02691156 02828884 02933112 02958343 03001627 03211117 03636649 03691459 04090263 04256520 04379243 04401088 04530566"
+ids="02958343"
+#ids="03001627 03211117 03636649"
+#ids="03691459 04090263 04256520"
+#ids="04379243 04401088 04530566"
 for j in ${ids}
 do
-    # training of 3D-AE-featGAN
-    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=train --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
-    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN/sample3D_${j}_AEfeatGAN616 \
-    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN/ckpt3D_${j}_AEfeatGAN616 \
+#    # training of 3D-AE-featGAN
+#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=train --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+#    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN/sample3D_${j}_AEfeatGAN616 \
+#    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN/ckpt3D_${j}_AEfeatGAN616 \
+#    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
+#    --sample_step=500 --ckpt_step=500 --n_iters=20000 --decay_batch=40000 --decay_every=5000 --decay_order=0.1 --device_id=0 \
+#    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_Gprior=1. --lambda_adv=1. --latent_dim=512 \
+#    --visdom_env=log3D-AEfeatGAN_${j} --G_every=2
+##    --batches_done=20000 \
+##    --load_G=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-G.ckpt \
+##    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-E.ckpt \
+##    --load_D=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-D.ckpt
+
+# training of CVPR19 model: AE+GANonImageDomain
+    CUDA_VISIBLE_DEVICES=0 python 3D-GAN.py --mode=trainCVPR19 --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
+    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/CVPR1111/sample3D_${j} \
+    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/CVPR1111/ckpt3D_${j} \
     --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
     --sample_step=500 --ckpt_step=500 --n_iters=20000 --decay_batch=40000 --decay_every=5000 --decay_order=0.1 --device_id=0 \
-    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_Gprior=1. --lambda_adv=1. --latent_dim=512 \
-    --visdom_env=log3D-AEfeatGAN_${j} --G_every=2
-#    --batches_done=20000 \
-#    --load_G=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-G.ckpt \
-#    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-E.ckpt \
-#    --load_D=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-D.ckpt
+    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_adv=1. --latent_dim=512 \
+    --visdom_env=log3D-CVPR1111_${j} --G_every=2 --channels=25
 
 #
 #    ## MMD between features of different poses

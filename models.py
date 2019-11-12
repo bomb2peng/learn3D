@@ -84,7 +84,7 @@ class Mesh_Renderer(nn.Module):
         renderer = nr.Renderer(camera_mode='look_at', image_size=self.img_size, viewing_angle=15)
         self.renderer = renderer
 
-    def forward(self, viewpoints=None):
+    def forward(self, viewpoints=None, viewidN=None):
         batch_size = self.vertices.shape[0]
         viewpoints_flag = 0
         if viewpoints is None:
@@ -94,6 +94,17 @@ class Mesh_Renderer(nn.Module):
             viewids = torch.randint(0, 24, (batch_size,), device=0)
             azimuths = -viewids*15
             # azimuths = -5*15*torch.ones((batch_size,))      # restrict to a certain pose
+            viewpoints = nr.get_points_from_angles(distances, elevations, azimuths)
+
+        if viewidN is not None:     # generate random viewpoints that are different from "viewpointsN"
+            viewpoints_flag = 1
+            distances = torch.ones(batch_size, device=0) * self.distance
+            elevations = torch.ones(batch_size, device=0) * self.elevation
+            viewids = torch.randint(0, 24, (batch_size,), device=0)
+            for i in range(batch_size):
+                while viewids[i] == viewidN[i]:
+                    viewids[i] = torch.randint(0, 24, (1,), device=0)
+            azimuths = -viewids * 15
             viewpoints = nr.get_points_from_angles(distances, elevations, azimuths)
 
         self.renderer.eye = viewpoints
@@ -154,3 +165,36 @@ class feat_Discriminator(nn.Module):
         logdigit = F.log_softmax(self.digit_layer(x_hidden1), dim=1)
         # return validity, x_hidden1
         return logdigit
+
+
+class DCGAN_Discriminator(nn.Module):
+    def __init__(self, img_size, channels):
+        super(DCGAN_Discriminator, self).__init__()
+        self.chans = 1024
+        Norm = lambda x : nn.BatchNorm2d(x)
+        self.model = nn.Sequential(
+            nn.Conv2d(channels, self.chans//8, 4, 2, 1),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(self.chans//8, self.chans//4, 4, 2, 1),
+            Norm(self.chans//4),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(self.chans//4, self.chans//2, 4, 2, 1),
+            Norm(self.chans//2),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(self.chans//2, self.chans, 4, 2, 1),
+            Norm(self.chans),
+            nn.LeakyReLU(0.2),
+        )
+
+        # The height and width of downsampled image
+        ds_size = img_size // 2**4
+        self.adv_layer = nn.Sequential( nn.Linear(self.chans*ds_size**2, 1), nn.Sigmoid())
+
+    def forward(self, img):
+        out = self.model(img)
+        out = out.view(out.shape[0], -1)
+        validity = self.adv_layer(out)
+        return validity, out
