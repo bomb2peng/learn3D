@@ -68,10 +68,14 @@ class Mesh_Generator(nn.Module):
 
 
 class Mesh_Renderer(nn.Module):
-    def __init__(self, vertices, faces, img_size=64, mode='silhouettes'):
+    def __init__(self, vertices, faces, img_size=64, mode='silhouettes', dataset='CVPR18'):
         super(Mesh_Renderer, self).__init__()
-        self.elevation = 30.
-        self.distance = 2.732
+        if dataset == 'CVPR18':
+            self.elevation = 30.
+            self.distance = 2.732
+            vAngle = 15
+        elif dataset == 'NIPS17':
+            vAngle = 14.9314
         self.vertices = vertices
         self.register_buffer('faces', faces)
         self.img_size = img_size
@@ -81,7 +85,7 @@ class Mesh_Renderer(nn.Module):
         self.register_buffer('textures', textures)
         self.mode = mode
         # setup renderer
-        renderer = nr.Renderer(camera_mode='look_at', image_size=self.img_size, viewing_angle=15)
+        renderer = nr.Renderer(camera_mode='look_at', image_size=self.img_size, viewing_angle=vAngle)
         self.renderer = renderer
 
     def forward(self, viewpoints=None, viewidN=None):
@@ -149,14 +153,14 @@ class Encoder(nn.Module):
 
 
 class feat_Discriminator(nn.Module):
-    def __init__(self, feat_dim):
+    def __init__(self, feat_dim, out_dim=24):
         super(feat_Discriminator, self).__init__()
         self.hidden_dim = [256, 128]
         self.feat_dim = feat_dim
         self.hidden_layer0 = nn.Linear(self.feat_dim, self.hidden_dim[0])
         self.hidden_layer1 = nn.Linear(self.hidden_dim[0], self.hidden_dim[1])
         # self.adv_layer = nn.Linear(self.hidden_dim[1], 1)
-        self.digit_layer = nn.Linear(self.hidden_dim[1], 24)
+        self.digit_layer = nn.Linear(self.hidden_dim[1], out_dim)
 
     def forward(self, feat):
         x_hidden0 = F.relu(self.hidden_layer0(feat))

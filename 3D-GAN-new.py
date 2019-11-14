@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import re
 import skimage.transform as skT
 import pandas as pd
+import math
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -34,7 +35,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='train', help='mode can be one of [xxx]')
 parser.add_argument('--dataset', type=str, help='which dataset to use-[CVPR18, NIPS17]', default='CVPR18')
 parser.add_argument('--data_dir', type=str, help='dir of dataset')
+parser.add_argument('--trainViews', type=int, help='number of views used in training', default=1)
 parser.add_argument('--split_file', type=str, help='dir of dataset split file [for NIPS17 dataset]')
+parser.add_argument('--wAzimuth', type=float, help='width of azimuth for view Bing of NIPS17 data', default=15)
+parser.add_argument('--wElevation', type=float, help='width of elevation for view Bing of NIPS17 data', default=10)
 parser.add_argument('--n_iters', type=int, default=3000, help='number of iterations for training')
 parser.add_argument('--batch_size', type=int, default=128, help='size of the batches')
 parser.add_argument('--lr', type=float, default=0.0001, help='adam: learning rate')
@@ -72,11 +76,17 @@ parser.add_argument('--lambda_adv', type=float, default=0., help='weight of adve
 parser.add_argument('--eval_flag', type=str, default='last', help='which ckpt to evaluate')
 parser.add_argument('--prefix', type=str, help='prefix id of the experimental run')
 
-
 t_start = time.time()
 opt = parser.parse_args()
 print(opt)
-viewBins = 24 if opt.dataset is 'CVPR18' else 24*5
+if opt.dataset == 'CVPR18':
+    viewBins = 24
+    nViews = 24
+elif opt.dataset == 'NIPS17':
+    nAzimuth = math.ceil(360 / opt.wAzimuth)
+    nElevation = math.ceil(60 / opt.wElevation)
+    viewBins = nAzimuth*nElevation
+    nViews = 20
 
 cuda = True if torch.cuda.is_available() else False
 device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
@@ -91,11 +101,11 @@ def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.spl
     with torch.no_grad():
         for class_id in class_ids:
             loader_val = data.DataLoader(dataset_val, batch_sampler=
-            data_loader.ShapeNet_sampler_all(dataset_val, opt.batch_size, class_id))
+            data_loader.ShapeNet_sampler_all(dataset_val, opt.batch_size, class_id, nViews), num_workers=4)
             iou = 0
             ious = {}
             print('%s_%s has %d images, %d batches...' % (dataset_val.set_name, class_id,
-                                                          dataset_val.num_data[class_id] * 24, len(loader_val)))
+                                                          dataset_val.num_data[class_id] * nViews, len(loader_val)))
             for i, (imgs, _, _, voxels) in enumerate(loader_val):
                 real_imgs = Variable(imgs.to(device))
                 z = encoder(real_imgs)
@@ -103,11 +113,15 @@ def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.spl
                 faces = nr.vertices_to_faces(vertices, faces).data
                 faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
                 voxels_predicted = voxelization.voxelize(faces, 32, False)
-                voxels_predicted = voxels_predicted.transpose(1, 2).flip([3])
+                if opt.dataset == 'CVPR18':
+                    voxels_predicted = voxels_predicted.transpose(1, 2).flip([3])
+                elif opt.dataset == 'NIPS17':
+                    voxels_predicted = voxels_predicted.transpose(1, 3).flip([1])
+
                 iou_batch = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
                             torch.Tensor.float(0 < (voxels + voxels_predicted.cpu())).sum((1, 2, 3))
                 iou += iou_batch.sum()
-            iou /= dataset_val.num_data[class_id] * 24.
+            iou /= dataset_val.num_data[class_id] * nViews
             print('%s/iou_%s: %f' % (dataset_val.set_name, class_id, iou.item()))
             ious['%s/iou_%s' % (dataset_val.set_name, class_id)] = iou.item()
         iou_mean = np.mean([float(v) for v in ious.values()])
@@ -119,12 +133,12 @@ def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.spl
         return iou_mean
 
 
-def eval_MMD(encoder, dataset_test):
+def eval_MMD(encoder, dataset_test):   # currently only applicable to cvpr18 dataset, as NIPS17 dataset has random views
     encoder.eval()
 
     # Configure data loader
     dataloader = data.DataLoader(dataset_test, batch_size=opt.batch_size, shuffle=False, drop_last=False)
-    n_batches = 24 * 4  # int(1e6)
+    n_batches = nViews * 4  # int(1e6)  # choose small n_batches for efficiency
     features = torch.zeros((min(opt.batch_size * n_batches, len(dataset_test)), opt.latent_dim)).to(device)
     # ----------
     #  forward
@@ -139,18 +153,18 @@ def eval_MMD(encoder, dataset_test):
 
             features[(i * opt.batch_size):min((i + 1) * opt.batch_size, len(dataset_test)), :] = torch.squeeze(z.data)
 
-    features = features.reshape((int(features.shape[0] / 24), 24, features.shape[1]))
+    features = features.reshape((int(features.shape[0] / nViews), nViews, features.shape[1]))
     features = features.transpose(1, 0)
     print('features shape is: ', features.shape)
 
-    MMDs = torch.zeros(int(24 * 23 / 2)).to(device)
+    MMDs = torch.zeros(int(nViews * (nViews-1) / 2)).to(device)
     k = 0
-    for i in range(24):
-        for j in range(i + 1, 24):
+    for i in range(nViews):
+        for j in range(i + 1, nViews):
             sliceA = features[i, :, :]
             sliceB = features[j, :, :]
             MMD = L.mmd_rbf(sliceA, sliceB)
-            # print('processed %d/%d, MMD is %f' % (k+1, int(24*23/2), MMD))
+            # print('processed %d/%d, MMD is %f' % (k+1, int(viewBins*23/2), MMD))
             MMDs[k] = MMD
             k += 1
     meanMMD = torch.mean(MMDs)
@@ -177,7 +191,7 @@ if opt.mode == 'train':
     # Initialize encoder and decoder and discriminator
     encoder = M.Encoder(4, dim_out=opt.latent_dim)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
-    discriminator = M.feat_Discriminator(opt.latent_dim)
+    discriminator = M.feat_Discriminator(opt.latent_dim, viewBins)
 
     if os.path.isfile('smoothness_params_642.npy'):
         smoothness_params = np.load('smoothness_params_642.npy')
@@ -203,16 +217,20 @@ if opt.mode == 'train':
     else:
         discriminator.load_state_dict(torch.load(opt.load_D))
 
-    if opt.dataset is 'CVPR18':
+    if opt.dataset == 'CVPR18':
         # Configure data loader for shapeNet dataset in Kato's CVPR18
         dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
         dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
         dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
-    elif opt.dataset is 'NIPS17':
+    elif opt.dataset == 'NIPS17':
         # Configure data loader for shapeNet dataset in Kar's NIPS17
-        dataset_train = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file, opt.class_ids.split(','), 'train', opt.img_size)
-        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
-        dataset_val = data_loader.ShapeNet(opt.data_dir, opt.split_file, opt.class_ids.split(','), 'val', opt.img_size)
+        dataset_train = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
+                                                 opt.class_ids.split(','), 'train', opt.img_size, opt.trainViews,
+                                                 opt.wAzimuth, opt.wElevation)
+        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False, num_workers=4)
+        dataset_val = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
+                                               opt.class_ids.split(','), 'val', opt.img_size, nViews,
+                                               opt.wAzimuth, opt.wElevation) # use all views for validation
     # Optimizers
     optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
     optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
@@ -237,7 +255,7 @@ if opt.mode == 'train':
             z = encoder(real_imgs)
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
-            mesh_renderer = M.Mesh_Renderer(vertices, faces).cuda(opt.device_id)
+            mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset=opt.dataset).cuda(opt.device_id)
 
             gen_imgs = mesh_renderer(viewpoints)
             gt_imgs = real_imgs[:,3,:,:]
@@ -307,10 +325,12 @@ if opt.mode == 'train':
             # validation on val dataset
             if batches_done % opt.ckpt_step == 0 or batches_done == last_iter:
                 iou_val = eval_IoU(encoder, mesh_generator, dataset_val)
-                MMD_val = eval_MMD(encoder, dataset_val)
+                if opt.dataset == 'CVPR18':
+                    MMD_val = eval_MMD(encoder, dataset_val)
                 f_log.write('batches_done: %d, validation iou: %f\r\n' % (batches_done, iou_val))
                 ploter.plot('IoU_loss', 'voxel_IoU_val', 'IoU-loss', batches_done, iou_val)
-                ploter.plot('IoU_loss', 'MMD_val', 'IoU-loss', batches_done, MMD_val)
+                if opt.dataset == 'CVPR18':
+                    ploter.plot('IoU_loss', 'MMD_val', 'IoU-loss', batches_done, MMD_val)
                 torch.save(encoder.state_dict(), os.path.join(opt.ckpt_dir, 'last-E.ckpt'))
                 torch.save(mesh_generator.state_dict(), os.path.join(opt.ckpt_dir, 'last-G.ckpt'))
                 torch.save(discriminator.state_dict(), os.path.join(opt.ckpt_dir, 'last-D.ckpt'))
@@ -422,10 +442,10 @@ if opt.mode == 'trainCVPR19':
             iou_loss = L.iou_loss(gt_imgs, gen_imgs)
 
             imgs_newView, viewids_fake = mesh_renderer(viewidN = torch.Tensor.float(viewids_real).to(device))  # random new views
-            labels_fake = torch.zeros((imgs_newView.shape[0], 24, opt.img_size, opt.img_size),
+            labels_fake = torch.zeros((imgs_newView.shape[0], viewBins, opt.img_size, opt.img_size),
                                       dtype=torch.float)
             labels_fake = Variable(labels_fake.to(device))
-            labels_real = torch.zeros((gen_imgs.shape[0], 24, opt.img_size, opt.img_size), dtype=torch.float)
+            labels_real = torch.zeros((gen_imgs.shape[0], viewBins, opt.img_size, opt.img_size), dtype=torch.float)
             labels_real = Variable(labels_real.to(device))
 
             for ii in range(imgs_newView.shape[0]):
@@ -544,14 +564,20 @@ elif opt.mode == 'evaluation':
         encoder.cuda(opt.device_id)
     ious = []
     for class_id in opt.class_ids.split(','):
-        subdir = 'ckpt3D_' + class_id + '_' + opt.prefix
+        # subdir = 'ckpt3D_' + class_id + '_' + opt.prefix
+        subdir = 'ckpt3D_' + class_id
         ckptG = os.path.join(opt.ckpt_dir, subdir, opt.eval_flag+'-G.ckpt')
         ckptE = os.path.join(opt.ckpt_dir, subdir, opt.eval_flag+'-E.ckpt')
         # Initialize weights
         mesh_generator.load_state_dict(torch.load(ckptG))
         encoder.load_state_dict(torch.load(ckptE))
         # Configure data loader
-        dataset_test = data_loader.ShapeNet(opt.data_dir, [class_id], 'test')
+        if opt.dataset == 'CVPR18':
+            dataset_test = data_loader.ShapeNet(opt.data_dir, [class_id], 'test')
+        elif opt.dataset == 'NIPS17':
+            dataset_test = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
+                                               [class_id], 'test', opt.img_size, nViews)
+
         ious.append(eval_IoU(encoder, mesh_generator, dataset_test, [class_id]))
     ious.append(np.mean(ious))
     print(str(ious))
@@ -578,12 +604,12 @@ elif opt.mode == 'reconstruct':
     img = torch.from_numpy(img)
     real_imgs = Variable(img.to(device))
     z = encoder(real_imgs)
-    z = z.repeat((24, 1))
+    z = z.repeat((viewBins, 1))
     vertices, faces = mesh_generator(z)
-    azimuths = -15. * torch.arange(0, 24)
+    azimuths = -15. * torch.arange(0, viewBins)
     azimuths = torch.Tensor.float(azimuths)
-    elevations = 30. * torch.ones((24))
-    distances = 2.732 * torch.ones((24))
+    elevations = 30. * torch.ones((viewBins))
+    distances = 2.732 * torch.ones((viewBins))
     viewpoints_fixed = nr.get_points_from_angles(distances, elevations, azimuths)
     mesh_renderer = M.Mesh_Renderer(vertices, faces, opt.img_size, 'rgb').cuda(opt.device_id)
     gen_imgs_fixed = mesh_renderer(viewpoints_fixed)
@@ -678,7 +704,7 @@ elif opt.mode == 'interpolation':
     img = torch.from_numpy(img)
     real_imgs = Variable(img.to(device))
     z0 = encoder(real_imgs)
-    z0 = z0.repeat((24, 1))
+    z0 = z0.repeat((viewBins, 1))
 
     img1 = plt.imread(opt.load_im1)
     img = img1.transpose((2, 0, 1))
@@ -687,13 +713,13 @@ elif opt.mode == 'interpolation':
     img = torch.from_numpy(img)
     real_imgs = Variable(img.to(device))
     z1 = encoder(real_imgs)
-    z1 = z1.repeat((24, 1))
+    z1 = z1.repeat((viewBins, 1))
 
     N = 5   # number of interpolation points
-    azimuths = -15. * torch.arange(0, 24)
+    azimuths = -15. * torch.arange(0, viewBins)
     azimuths = torch.Tensor.float(azimuths)
-    elevations = 30. * torch.ones((24))
-    distances = 2.732 * torch.ones((24))
+    elevations = 30. * torch.ones((viewBins))
+    distances = 2.732 * torch.ones((viewBins))
     viewpoints_fixed = nr.get_points_from_angles(distances, elevations, azimuths)
     fn0 = os.path.splitext(os.path.basename(opt.load_im))[0]
     (fn, id0) = re.split('_', fn0)[0:2]

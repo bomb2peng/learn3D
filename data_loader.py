@@ -12,6 +12,9 @@ import random
 import tqdm
 import neural_renderer as nr
 import skimage.transform as skT
+import json
+import scipy.io as sio
+import math
 
 
 class ShapeNet(data.Dataset):
@@ -97,19 +100,99 @@ class ShapeNet_Sampler_Batch(data.Sampler):
 
 
 class ShapeNet_sampler_all(data.Sampler):
-    def __init__(self, data_source, batch_size, class_id):
+    def __init__(self, data_source, batch_size, class_id, nViews=24):
         self.data_source = data_source
         self.batch_size = batch_size
         self.class_id = class_id
+        self.nViews = nViews
 
     def __iter__(self):
         data_ids = np.arange(self.data_source.num_data[self.class_id]) + self.data_source.pos[self.class_id]
-        viewpoint_ids = np.tile(np.arange(24), data_ids.size)
-        data_ids = np.repeat(data_ids, 24) * 24 + viewpoint_ids
+        viewpoint_ids = np.tile(np.arange(self.nViews), data_ids.size)
+        data_ids = np.repeat(data_ids, self.nViews) * self.nViews + viewpoint_ids
         for i in range(self.__len__()):
             img_ids = data_ids[i * self.batch_size:min((i + 1) * self.batch_size,
-                                                       self.data_source.num_data[self.class_id]*24)]
+                                                       self.data_source.num_data[self.class_id]*self.nViews)]
             yield img_ids
 
     def __len__(self):
-        return (self.data_source.num_data[self.class_id]*24-1) // self.batch_size +1
+        return (self.data_source.num_data[self.class_id]*self.nViews-1) // self.batch_size +1
+
+
+def get_split(split_js='data/splits.json'):
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    with open(os.path.join(dir_path, split_js), 'r') as f:
+        js = json.load(f)
+    return js
+
+def viewpoint2bin(azimuth, elevation, wAzimuth, wElevation):
+    nAzimuth = math.ceil(360/wAzimuth)
+    nElevation = math.ceil(60/wElevation)     # actual dataset view range is different from described in paper, elevation is [-20, 40)
+    if elevation == 40:
+        elevation = 39.9
+    if azimuth == 180:
+        azimuth = 179.9
+    bin = ((azimuth+180)//wAzimuth)*nElevation + (elevation+20)//wElevation
+    bin = int(bin)
+    # print([azimuth, elevation, bin])
+    assert bin < nAzimuth*nElevation
+    return bin
+
+class ShapeNet_LSM(data.Dataset):
+    """dataset from NIPS17 paper LSM: https://github.com/akar43/lsm/blob/01edb3ce70a989207fd843bacf7693c057eb073e/shapenet.py#L13"""
+    def __init__(self, dataDir=None, splitFile=None, class_ids=None, set_name=None, img_resize=64, N_views=1,
+                 wAzimuth=15, wElevation=10):
+        self.set_name = set_name
+        self.img_resize = img_resize
+        self.N_views = N_views
+        self.splits_all = get_split(splitFile)
+        self.class_ids = (self.splits_all.keys()
+                          if class_ids is None else class_ids)
+        self.splits = {k: self.splits_all[k] for k in self.class_ids}
+        loop = tqdm.tqdm(self.class_ids)
+        loop.set_description('Loading dataset')
+        self.imgDirs = []
+        self.depDir = []
+        self.views = []
+        self.voxelDirs = []
+        self.num_data = {}
+        self.pos = {}
+        self.wAzimuth=wAzimuth
+        self.wElevation=wElevation
+        count = 0
+        for class_id in loop:
+            obj_ids = self.splits[class_id][set_name]
+            for obj_id in obj_ids:
+                renderDir = os.path.join(dataDir, 'renders', class_id, obj_id)
+                voxelDir = os.path.join(dataDir, 'voxels', 'modelVoxels32', class_id, '%s.mat' % obj_id)
+                self.voxelDirs.append(voxelDir)
+                viewDir = os.path.join(renderDir, 'view.txt')
+                views = np.loadtxt(viewDir)
+                for i in range(N_views):
+                    self.imgDirs.append(os.path.join(renderDir, 'render_%d.png' % i))
+                    self.depDir.append(os.path.join(renderDir, 'depth_%d.png' % i))
+                    self.views.append(views[i,:])
+            self.num_data[class_id] = len(obj_ids)
+            self.pos[class_id] = count
+            count = count + self.num_data[class_id]
+        # views = np.array(self.views)
+        # print(np.min(views, axis=0))
+        # print(np.max(views, axis=0))
+
+    def __len__(self):
+        N = len(self.imgDirs)
+        return N
+
+    def __getitem__(self, item):
+        img = cv2.imread(self.imgDirs[item]).astype('float32') / 255.
+        depth = cv2.imread(self.depDir[item], cv2.IMREAD_GRAYSCALE)
+        mask = np.float32(depth < 250)[:,:,np.newaxis]
+        image = np.concatenate((img, mask), 2)
+        image = skT.resize(image, (self.img_resize,self.img_resize), anti_aliasing=True)
+        image = np.float32(image.transpose((2,0,1)))
+        imageT = torch.from_numpy(image)
+        viewpoints = nr.get_points_from_angles(self.views[item][3], self.views[item][1], self.views[item][0])
+        view_id = viewpoint2bin(self.views[item][0], self.views[item][1], self.wAzimuth, self.wElevation)
+        voxel = sio.loadmat(self.voxelDirs[item//self.N_views])['Volume']
+        voxelT = torch.from_numpy(voxel.astype(np.int32))
+        return imageT, torch.Tensor(viewpoints), view_id, voxelT

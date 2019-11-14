@@ -1,26 +1,52 @@
-# # test the cuda module "voxelization"
-# import torch
-# import neural_renderer as nr
-# import voxelization
-# import matplotlib.pyplot as plt
-# # This import registers the 3D projection, but is otherwise unused.
-# from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+# test the cuda module "voxelization"
+import torch
+import neural_renderer as nr
+import voxelization
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.io as sio
+# This import registers the 3D projection, but is otherwise unused.
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 #
-# vertices0, faces0 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06000.obj')
-# vertices1, faces1 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06500.obj')
-# vertices2, faces2 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06900.obj')
-# vertices = torch.cat((vertices0[None, :, :], vertices1[None, :, :], vertices2[None, :, :]), 0)
-# faces = torch.cat((faces0[None, :, :], faces1[None, :, :], faces2[None, :, :]), 0)
-# faces = nr.vertices_to_faces(vertices, faces)
-# voxels = voxelization.voxelize(faces, 32, normalize=True)
-#
+# npz_dir = "/hd2/pengbo/mesh_reconstruction/dataset/02691156_test_voxels.npz"
+# voxels_all = np.load(npz_dir)['arr_0']
+# voxel = voxels_all[1,:,:,:]
+# print(voxel.shape)
+# fig = plt.figure()
+# ax = fig.gca(projection='3d')
+# ax.voxels(voxel, facecolors='green', edgecolor='k')
+
+voxel_dir = "/hd3/pengbo/shapenet_LSM/lsm/data/shapenet_release/voxels/modelVoxels32/02691156/10155655850468db78d106ce0a280f87.mat"
+voxel = sio.loadmat(voxel_dir)['Volume']
+voxel = voxel.transpose((2,1,0))
+voxel = np.flip(voxel, 2)
+fig = plt.figure()
+ax = fig.gca(projection='3d')
+ax.voxels(voxel, facecolors='green', edgecolor='k')
+
+
+# # vertices0, faces0 = nr.load_obj("/hd2/pengbo/allProjects/mesh_reconstruction/data/examples/car_out_0.obj", normalization=False)
+# vertices0, faces0 = nr.load_obj("/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN_LSM1112/sample3D_02691156/20000.obj", normalization=False)
+# # vertices1, faces1 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06500.obj')
+# # vertices2, faces2 = nr.load_obj('/hd2/pengbo/mesh_reconstruction/models/sample3D_04401088_AE1/random-06900.obj')
+# # vertices = torch.cat((vertices0[None, :, :], vertices1[None, :, :], vertices2[None, :, :]), 0)
+# # faces = torch.cat((faces0[None, :, :], faces1[None, :, :], faces2[None, :, :]), 0)
+# print(torch.max(vertices0))
+# vertices = vertices0[None,:,:]
+# faces = faces0[None,:,:]
+# faces = nr.vertices_to_faces(vertices, faces).data
+# faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
+# voxels = voxelization.voxelize(faces, 32, normalize=False)
 # # and plot everything
 # for i in range(voxels.shape[0]):
 #     fig = plt.figure()
 #     ax = fig.gca(projection='3d')
 #     ax.voxels(voxels[i,:,:,:].squeeze().cpu().numpy(), facecolors='green', edgecolor='k')
 #
-# plt.show()
+ax.set_xlabel('X Label')
+ax.set_ylabel('Y Label')
+ax.set_zlabel('Z Label')
+plt.show()
 
 # ##################################################################
 # # fetch some random test images and save
@@ -94,10 +120,10 @@
 #     except:
 #         pass
 
-import matplotlib.pyplot as plt
-cm = plt.cm.get_cmap('RdYlBu')
-xy = range(20)
-z = xy
-sc = plt.scatter(xy, xy, c=z, vmin=0, vmax=20, s=35, cmap=cm)
-plt.colorbar(sc)
-plt.show()
+# import matplotlib.pyplot as plt
+# cm = plt.cm.get_cmap('RdYlBu')
+# xy = range(20)
+# z = xy
+# sc = plt.scatter(xy, xy, c=z, vmin=0, vmax=20, s=35, cmap=cm)
+# plt.colorbar(sc)
+# plt.show()
