@@ -5,21 +5,30 @@
 
 # batch runs
 #ids="02691156 02828884 02933112 02958343 03001627 03211117 03636649 03691459 04090263 04256520 04379243 04401088 04530566"
-ids="02691156 02828884"
-#ids="02691156 02828884 02933112 02958343 03001627 03211117 03636649"
-#ids="03691459 04090263 04256520 04379243 04401088 04530566"
+ids="02691156"
+#ids="02828884 02933112 02958343"
+#ids="03001627 03211117 03636649"
+#ids="04090263 04256520 04379243"
+
 for j in ${ids}
 do
 #    # training of 3D-AE-featGAN on CVPR18 dataset
-#    CUDA_VISIBLE_DEVICES=2 python 3D-GAN-new.py --mode=train \
+#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN-new.py --mode=train \
 #    --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ --trainViews=24 \
 #    --dataset=CVPR18 \
-#    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/woGAN1114/sample3D_${j} \
-#    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/woGAN1114/ckpt3D_${j} \
+#    --sample_dir=/hd2/pengbo/mesh_reconstruction/models/temp/sample3D_${j} \
+#    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/temp/ckpt3D_${j} \
 #    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
 #    --sample_step=500 --ckpt_step=500 --n_iters=20000 --decay_batch=40000 --decay_every=5000 --decay_order=0.1 --device_id=0 \
-#    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_Gprior=1. --lambda_adv=0 --latent_dim=512 \
-#    --visdom_env=log3D-woGAN1114_${j} --G_every=2
+#    --class_ids=${j} --img_size=64 --lambda_smth=0.001 --lambda_Gprior=1. --lambda_adv=1 --latent_dim=512 \
+#    --visdom_env=log3D-temp_${j} --G_every=2
+
+#    # Evaluations each model
+#    CUDA_VISIBLE_DEVICES=0 python 3D-GAN-new.py --mode=evaluation \
+#    --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ --dataset=CVPR18 --class_id=${j} \
+#    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
+#    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616 \
+#    --device_id=0 --img_size=64 --latent_dim=512 --eval_flag=last
 
 #    # training of 3D-AE-featGAN on NIPS17 dataset
 #    CUDA_VISIBLE_DEVICES=0 python 3D-GAN-new.py --mode=train \
@@ -37,13 +46,12 @@ do
 ##    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-E.ckpt \
 ##    --load_D=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN616/ckpt3D_${j}_AEfeatGAN616/last-D.ckpt
 
-    # Evaluations each model
-    CUDA_VISIBLE_DEVICES=0 python 3D-GAN-new.py --mode=evaluation \
-    --data_dir=/hd3/pengbo/shapenet_LSM/lsm/data/shapenet_release/ --dataset=NIPS17 --class_id=${j} \
-    --split_file=/hd3/pengbo/shapenet_LSM/lsm/data/splits.json \
-    --obj_dir=/hd2/pengbo/mesh_reconstruction/models/template_obj/sphere_642.obj \
-    --ckpt_dir=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN_LSMtest1 \
-    --device_id=0 --img_size=64 --latent_dim=512 --eval_flag=last
+    ## t-SNE visualization
+    CUDA_VISIBLE_DEVICES=3 python 3D-GAN-new.py --mode=t_SNE --data_dir=/hd3/pengbo/shapenet_LSM/lsm/data/shapenet_release/ \
+    --dataset=NIPS17 --split_file=/hd3/pengbo/shapenet_LSM/lsm/data/splits.json --device_id=0 \
+    --wAzimuth=15 --wElevation=20 \
+    --class_ids=${j} --img_size=64 --latent_dim=512 \
+    --load_E=/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN_LSMtest1/ckpt3D_${j}/last-E.ckpt
 
 ## training of CVPR19 model: AE+GANonImageDomain
 #    CUDA_VISIBLE_DEVICES=0 python 3D-GAN.py --mode=trainCVPR19 --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
@@ -85,11 +93,6 @@ do
 #        --load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp/last-E.ckpt
 #    done
 
-#    ## t-SNE visualization
-#    CUDA_VISIBLE_DEVICES=3 python 3D-GAN.py --mode=t_SNE --data_dir=/hd2/pengbo/mesh_reconstruction/dataset/ \
-#    --n_epochs=1 --device_id=0 \
-#    --class_ids=${j} --img_size=64 --latent_dim=512 \
-#    --load_E=/hd2/pengbo/mesh_reconstruction/models/ckpt3D_temp/last-E.ckpt
 
 done
 

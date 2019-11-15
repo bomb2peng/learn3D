@@ -16,6 +16,57 @@ import json
 import scipy.io as sio
 import math
 
+class ShapeNetSingle(data.Dataset):
+    def __init__(self, directory=None, class_ids=None, set_name=None, img_resize=64):
+        self.class_ids = class_ids
+        self.set_name = set_name
+        self.elevation = 30.
+        self.distance = 2.732
+        self.img_resize = img_resize
+
+        images = []
+        voxels = []
+        self.num_data = {}
+        self.pos = {}
+        count = 0
+        loop = tqdm.tqdm(self.class_ids)
+        loop.set_description('Loading dataset')
+        for class_id in loop:
+            images.append(np.load(
+                os.path.join(directory, '%s_%s_images.npz' % (class_id, set_name)))['arr_0'])
+            voxels.append(np.load(
+                os.path.join(directory, '%s_%s_voxels.npz' % (class_id, set_name)))['arr_0'])
+            self.num_data[class_id] = images[-1].shape[0]
+            self.pos[class_id] = count
+            count += self.num_data[class_id]
+        images = np.concatenate(images, axis=0).reshape((-1, 4, 64, 64))
+        images = np.ascontiguousarray(images)
+        
+        # images = images[range(5,images.shape[0],24),:,:,:]      # only take a certain pose as training data. REMEMBER
+        #  the #*24 in line 188
+        self.images = images
+        self.n_objects = count
+        self.voxels = np.ascontiguousarray(np.concatenate(voxels, axis=0))
+        del images
+        del voxels
+
+    def __len__(self):
+        N = 0
+        for class_id in self.class_ids:
+            N = N + self.num_data[class_id] *24
+        return N
+
+    def __getitem__(self, item):
+        image = self.images[item,:,:,:].astype('float32') / 255.
+        image = skT.resize(image.transpose((1,2,0)), (self.img_resize,self.img_resize), anti_aliasing=True)
+        image = np.float32(image.transpose((2,0,1)))
+        imageT = torch.from_numpy(image)
+        view_id = item % 24
+        viewpoints = nr.get_points_from_angles(self.distance, self.elevation, -view_id * 15)
+        voxel = self.voxels[item//24,:,:,:]
+        voxelT = torch.from_numpy(voxel.astype(np.int32))
+        return imageT, torch.Tensor(viewpoints), view_id, voxelT
+
 
 class ShapeNet(data.Dataset):
     def __init__(self, directory=None, class_ids=None, set_name=None, img_resize=64):

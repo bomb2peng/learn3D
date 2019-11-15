@@ -632,8 +632,12 @@ elif opt.mode == 't_SNE':
     encoder.eval()
 
     # Configure data loader
-    dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val')
-    dataloader = data.DataLoader(dataset_val, batch_size=opt.batch_size, shuffle=True, drop_last=True)
+    if opt.dataset == 'CVPR18':
+        dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val')
+    elif opt.dataset == 'NIPS17':
+        dataset_val = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
+                                               opt.class_ids.split(','), 'test', opt.img_size, nViews)
+    dataloader = data.DataLoader(dataset_val, batch_size=opt.batch_size, shuffle=True, drop_last=False)
 
     # features = np.zeros((len(dataset_val), opt.latent_dim))
     # labels = np.zeros(len(dataset_val))
