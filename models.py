@@ -3,6 +3,7 @@ import neural_renderer as nr
 import torch
 import numpy as np
 import torch.nn.functional as F
+import torchvision.models.resnet as resnet
 
 class Mesh_Generator(nn.Module):
     def __init__(self, latent_dim, filename_obj):
