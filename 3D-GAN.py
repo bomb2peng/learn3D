@@ -174,6 +174,7 @@ def eval_MMD(encoder, dataset_test):   # currently only applicable to cvpr18 dat
 
 
 if opt.mode == 'train':
+    # training the proposed model "3D-AE-featGAN"
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
     f_log = open(os.path.join(opt.ckpt_dir, 'val_log.txt'), 'a+')
@@ -361,6 +362,7 @@ if opt.mode == 'train':
     ploter.save()
 
 if opt.mode == 'trainCVPR19':
+    # training compared CVPR19 model: VPL (see paper for details)
     os.makedirs(opt.sample_dir, exist_ok=True)
     os.makedirs(opt.ckpt_dir, exist_ok=True)
     f_log = open(os.path.join(opt.ckpt_dir, 'val_log.txt'), 'a+')
@@ -549,10 +551,8 @@ if opt.mode == 'trainCVPR19':
     f_log.close()
     ploter.save()
 
-
-
-
 elif opt.mode == 'evaluation':
+    # evaluate reconstruction accuracy using voxel IoU
     f_log = open(os.path.join(opt.ckpt_dir, 'test_log.txt'), 'a+')
     f_log.write(str(datetime.datetime.now()))
     print(opt.class_ids + ', mean')
@@ -585,6 +585,7 @@ elif opt.mode == 'evaluation':
     f_log.close()
 
 elif opt.mode == 'reconstruct':
+    # reconstruct sample images and save models for visulization
     os.makedirs(opt.sample_dir, exist_ok=True)
     encoder = M.Encoder(4, dim_out=opt.latent_dim)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
@@ -622,6 +623,7 @@ elif opt.mode == 'reconstruct':
     print('Saved reconstruction results of %s to %s...' % (fn, opt.sample_dir))
 
 elif opt.mode == 't_SNE':
+    # t_SNE visualization of learned shape embedings
     # Initialize encoder and decoder
     encoder = M.Encoder(4, dim_out=opt.latent_dim)
     if cuda:
@@ -689,6 +691,7 @@ elif opt.mode == 't_SNE':
     # plt.show()
 
 elif opt.mode == 'interpolation':
+    # shape space interpolation visualization
     os.makedirs(opt.sample_dir, exist_ok=True)
     encoder = M.Encoder(4, dim_out=opt.latent_dim)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
@@ -744,6 +747,7 @@ elif opt.mode == 'interpolation':
     print('Saved reconstruction results of %s to %s...' % (fn, opt.sample_dir))
 
 elif opt.mode == 'MMD':
+    # caculate MMD distance of shape embeddings in different domains/poses
     # Initialize encoder and decoder
     encoder = M.Encoder(4, dim_out=opt.latent_dim)
     if cuda:
