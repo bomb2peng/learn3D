@@ -1,4 +1,6 @@
 ## Learn3D Introduction
+This is the code repository for paper ["Learning Pose-invariant 3D Object Reconstruction from Single-view Images"](https://arxiv.org/abs/2004.01347)
+
 
 Learning category-specific 3D object shapes using 2D images is an active research topic, with merits of not requiring expensive 3D supervision. However, most work in this direction assumes there exist multiple images of the same instance from different views, which oftentimes does not apply in practice. In this paper, we explore a more challenging problem of learning 3D shape models from single-view images of the same object category. We show that this a very hard problem even with the knowledge of  viewpoint information. The major difficulty lies in insufficient constraints on shape provided by single view images, which leads to pose entanglement in learned shape space. To address this problem, we take a novel domain adaptation perspective, and propose an effective adversarial domain confusion training method (denoted as 3D-AE-featGAN in code) for learning pose-invariant compact shape space. Experiments on single-view shape reconstruction obtain promising results that demonstrate effectiveness of proposed method. 
 
@@ -44,4 +46,13 @@ This code and its derived model is only for non-profit acdemic research purposes
 
 ## Citation
 If you find this code usful, please cite our paper as 
+
+@misc{peng2020learning,  
+    title={Learning Pose-invariant 3D Object Reconstruction from Single-view Images},  
+    author={Bo Peng and Wei Wang and Jing Dong and Tieniu Tan},  
+    year={2020},  
+    eprint={2004.01347},  
+    archivePrefix={arXiv},  
+    primaryClass={cs.CV}  
+}
  
