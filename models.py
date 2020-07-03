@@ -71,12 +71,18 @@ class Mesh_Generator(nn.Module):
 class Mesh_Renderer(nn.Module):
     def __init__(self, vertices, faces, img_size=64, mode='silhouettes', dataset='CVPR18'):
         super(Mesh_Renderer, self).__init__()
+        self.dataset = dataset
         if dataset == 'CVPR18':
             self.elevation = 30.
             self.distance = 2.732
             vAngle = 15
         elif dataset == 'NIPS17':
             vAngle = 14.9314
+        elif dataset == 'Pascal3D':
+            self.t = torch.tensor([[[0., 0., 1. + 1e-5]]], device=0)
+            # the following rotation matrices are infered from Kato CVPR19 code, by pains of trial and error ..
+            self.R_compen = torch.tensor([[[-1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]], device=0)
+
         self.vertices = vertices
         self.register_buffer('faces', faces)
         self.img_size = img_size
@@ -86,13 +92,16 @@ class Mesh_Renderer(nn.Module):
         self.register_buffer('textures', textures)
         self.mode = mode
         # setup renderer
-        renderer = nr.Renderer(camera_mode='look_at', image_size=self.img_size, viewing_angle=vAngle)
+        if dataset == 'Pascal3D':       # orthogonal projection
+            renderer = nr.Renderer(camera_mode='None', image_size=self.img_size)
+        else:   # projective projection
+            renderer = nr.Renderer(camera_mode='look_at', image_size=self.img_size, viewing_angle=vAngle)
         self.renderer = renderer
 
     def forward(self, viewpoints=None, viewidN=None):
         batch_size = self.vertices.shape[0]
         viewpoints_flag = 0
-        if viewpoints is None:
+        if viewpoints is None:  # Just for CVPR18 dataset. generate random viewpoints
             viewpoints_flag = 1
             distances = torch.ones(batch_size, device=0) * self.distance
             elevations = torch.ones(batch_size, device=0) * self.elevation
@@ -101,7 +110,7 @@ class Mesh_Renderer(nn.Module):
             # azimuths = -5*15*torch.ones((batch_size,))      # restrict to a certain pose
             viewpoints = nr.get_points_from_angles(distances, elevations, azimuths)
 
-        if viewidN is not None:     # generate random viewpoints that are different from "viewpointsN"
+        if viewidN is not None:     # Just for CVPR18 dataset. generate random viewpoints that are different from "viewpointsN"
             viewpoints_flag = 1
             distances = torch.ones(batch_size, device=0) * self.distance
             elevations = torch.ones(batch_size, device=0) * self.elevation
@@ -112,9 +121,14 @@ class Mesh_Renderer(nn.Module):
             azimuths = -viewids * 15
             viewpoints = nr.get_points_from_angles(distances, elevations, azimuths)
 
-        self.renderer.eye = viewpoints
-
+        if self.dataset == 'Pascal3D':
+            R_rot = viewpoints  # given is the rotation matrix from Kato's Pascal3D dataset
+            R = torch.matmul(self.R_compen, R_rot)
+            self.vertices = torch.matmul(self.vertices, R.transpose(2, 1)) + self.t
+        else:
+            self.renderer.eye = viewpoints
         images = self.renderer(self.vertices, self.faces, mode=self.mode, textures=self.textures)
+
         if self.mode is 'silhouettes':
             images = images.reshape((batch_size, 1, self.img_size, self.img_size))
         if viewpoints_flag == 1:

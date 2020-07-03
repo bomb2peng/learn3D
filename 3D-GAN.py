@@ -87,6 +87,9 @@ elif opt.dataset == 'NIPS17':
     nElevation = math.ceil(60 / opt.wElevation)
     viewBins = nAzimuth*nElevation
     nViews = 20
+elif opt.dataset == 'Pascal3D':
+    viewBins = 0  # to be assigned later according to specific dataset
+    nViews = 1
 
 cuda = True if torch.cuda.is_available() else False
 device = 'cuda:%d' % opt.device_id if opt.device_id >= 0 else 'cpu'
@@ -98,8 +101,11 @@ if opt.visdom_env is not None:
 def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.split(',')):
     mesh_generator.eval()
     encoder.eval()
+    if opt.dataset == 'Pascal3D':
+        class_id_dic = {'02691156': 'aeroplane', '02958343': 'car', '03001627': 'chair'}
+        class_ids = [class_id_dic[class_id] for class_id in class_ids]
     with torch.no_grad():
-        for class_id in class_ids:
+        for class_id in class_ids:      # considering multiple classes case.
             loader_val = data.DataLoader(dataset_val, batch_sampler=
             data_loader.ShapeNet_sampler_all(dataset_val, opt.batch_size, class_id, nViews), num_workers=4)
             iou = 0
@@ -108,15 +114,22 @@ def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.spl
                                                           dataset_val.num_data[class_id] * nViews, len(loader_val)))
             for i, (imgs, _, _, voxels) in enumerate(loader_val):
                 real_imgs = Variable(imgs.to(device))
-                z = encoder(real_imgs)
+                if opt.dataset == 'Pascal3D':
+                    input_imgs = real_imgs[:, 0:3, :, :]
+                else:
+                    input_imgs = real_imgs
+                z = encoder(input_imgs)
                 vertices, faces = mesh_generator(z)
                 faces = nr.vertices_to_faces(vertices, faces).data
-                faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
+                # faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
+                faces = (faces + 1.0) * 0.5  # normalization
                 voxels_predicted = voxelization.voxelize(faces, 32, False)
                 if opt.dataset == 'CVPR18':
                     voxels_predicted = voxels_predicted.transpose(1, 2).flip([3])
                 elif opt.dataset == 'NIPS17':
                     voxels_predicted = voxels_predicted.transpose(1, 3).flip([1])
+                elif opt.dataset == 'Pascal3D':
+                    voxels_predicted = voxels_predicted.transpose(2, 3).flip([1,2,3])
 
                 iou_batch = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
                             torch.Tensor.float(0 < (voxels + voxels_predicted.cpu())).sum((1, 2, 3))
@@ -189,8 +202,34 @@ if opt.mode == 'train':
     else:
         iou_best = 0.
 
+    if opt.dataset == 'CVPR18':
+        # Configure data loader for shapeNet dataset in Kato's CVPR18
+        dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
+        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
+        dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
+    elif opt.dataset == 'NIPS17':
+        # Configure data loader for shapeNet dataset in Kar's NIPS17
+        dataset_train = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
+                                                 opt.class_ids.split(','), 'train', opt.img_size, opt.trainViews,
+                                                 opt.wAzimuth, opt.wElevation)
+        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False, num_workers=4)
+        dataset_val = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
+                                               opt.class_ids.split(','), 'val', opt.img_size, nViews,
+                                               opt.wAzimuth, opt.wElevation) # use all views for validation
+    elif opt.dataset == 'Pascal3D':
+        # Configure data loader for Pascal 3D+ dataset from Kato's CVPR19
+        dataset_train = data_loader.Pascal(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
+        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
+        dataset_val = data_loader.Pascal(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
+        viewBins = dataset_train.viewBins  # assign nViews according to pose distribution in training dataset
+
+    print('# training images: %d, # val images: %d, # viewBins: %d' % (len(dataset_train), len(dataset_val), viewBins))
+
     # Initialize encoder and decoder and discriminator
-    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    if opt.dataset == 'Pascal3D':
+        encoder = M.Encoder(3, dim_out=opt.latent_dim)
+    else:
+        encoder = M.Encoder(4, dim_out=opt.latent_dim)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     discriminator = M.feat_Discriminator(opt.latent_dim, viewBins)
 
@@ -218,20 +257,6 @@ if opt.mode == 'train':
     else:
         discriminator.load_state_dict(torch.load(opt.load_D))
 
-    if opt.dataset == 'CVPR18':
-        # Configure data loader for shapeNet dataset in Kato's CVPR18
-        dataset_train = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
-        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
-        dataset_val = data_loader.ShapeNet(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
-    elif opt.dataset == 'NIPS17':
-        # Configure data loader for shapeNet dataset in Kar's NIPS17
-        dataset_train = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
-                                                 opt.class_ids.split(','), 'train', opt.img_size, opt.trainViews,
-                                                 opt.wAzimuth, opt.wElevation)
-        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False, num_workers=4)
-        dataset_val = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
-                                               opt.class_ids.split(','), 'val', opt.img_size, nViews,
-                                               opt.wAzimuth, opt.wElevation) # use all views for validation
     # Optimizers
     optimizer_G = torch.optim.Adam(mesh_generator.parameters(), lr=opt.lr)
     optimizer_E = torch.optim.Adam(encoder.parameters(), lr=opt.lr)
@@ -253,7 +278,11 @@ if opt.mode == 'train':
             # -----------------
             #  Train Generator, Encoder and Discriminator
             # -----------------
-            z = encoder(real_imgs)
+            if opt.dataset == 'Pascal3D':
+                input_imgs = real_imgs[:, 0:3, :, :]
+            else:
+                input_imgs = real_imgs
+            z = encoder(input_imgs)
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
             mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset=opt.dataset).cuda(opt.device_id)

@@ -15,9 +15,13 @@ import skimage.transform as skT
 import json
 import scipy.io as sio
 import math
+from scipy.spatial.transform import Rotation as sciR
+import pandas as pd
+import matplotlib.pyplot as plt
 
 class ShapeNet(data.Dataset):
     def __init__(self, directory=None, class_ids=None, set_name=None, img_resize=64):
+        self.name = 'CVPR18'
         self.class_ids = class_ids
         self.set_name = set_name
         self.elevation = 30.
@@ -141,6 +145,7 @@ class ShapeNet_LSM(data.Dataset):
     """dataset from NIPS17 paper LSM: https://github.com/akar43/lsm/blob/01edb3ce70a989207fd843bacf7693c057eb073e/shapenet.py#L13"""
     def __init__(self, dataDir=None, splitFile=None, class_ids=None, set_name=None, img_resize=64, N_views=1,
                  wAzimuth=15, wElevation=10):
+        self.name = 'NIPS17'
         self.set_name = set_name
         self.img_resize = img_resize
         self.N_views = N_views
@@ -202,7 +207,7 @@ import os
 import scipy.misc
 
 
-def crop_image(image_in, image_ref, rotation, bounding_box, padding=0.15, jitter=0.15, flip=True, image_size=224):
+def crop_image(image_in, image_ref, rotation, bounding_box, padding=0.15, jitter=0.15, flip=True, image_size=64):
     # based on https://github.com/shubhtuls/drc/blob/master/utils/cropUtils.lua
 
     left, top, width_box, height_box = bounding_box
@@ -221,22 +226,40 @@ def crop_image(image_in, image_ref, rotation, bounding_box, padding=0.15, jitter
 
     # random flipping
     if flip:
-        if np.random.uniform(0, 1) < 0.5:
+        temp = np.random.uniform(0, 1)
+        # print(temp)
+        if temp < 0.5:
             image_in = image_in[:, ::-1]
 
     image_in = scipy.misc.imresize(image_in, (image_size, image_size)).astype('float32') / 255.
-    # image_in = image_in.astype('float32') / 255.
     image_in = image_in.transpose((2, 0, 1))
+    image_ref = scipy.misc.imresize(image_ref, (image_size, image_size)).astype('float32') / 255.
+    image_ref = image_ref.transpose((2, 0, 1))
     return image_in, image_ref, rotation
 
+def eulers2bin(eulers, steps):
+    # eulers: nparray [3], steps: list of len 3
+    Ns = [math.ceil(360/step) for step in list(steps)]
+    N = Ns[0]*Ns[1]*Ns[2]
+    for i in range(3):
+        if eulers[i] == 180:
+            eulers[i] = 179.9
+        elif eulers[i] == -180:
+            eulers[i] = -179.9
+
+    bin = ((eulers[0]+180)//steps[0])*Ns[1]*Ns[0] + ((eulers[1]+180)//steps[1])*Ns[0] + \
+    ((eulers[2] + 180) // steps[2])
+
+    bin = int(bin)
+    # print([azimuth, elevation, bin])
+    assert bin < N
+    return bin
 
 class Pascal(object):
-    def __init__(self, directory, class_ids, set_name):
-        self.name = 'pascal'
-        self.directory = directory
-        self.class_ids = class_ids
+    def __init__(self, directory, class_ids, set_name, img_size=64):
+        self.name = 'Pascal3D'
         self.set_name = set_name
-        self.image_size = 224
+        self.image_size = img_size
 
         self.images_original = {}
         self.images_ref = {}
@@ -244,6 +267,11 @@ class Pascal(object):
         self.rotation_matrices = {}
         self.voxels = {}
         self.num_data = {}
+        self.pos = {}
+        count = 0
+        class_id_dic = {'02691156': 'aeroplane', '02958343': 'car', '03001627': 'chair'}
+        class_ids = [class_id_dic[class_id] for class_id in class_ids]
+        self.class_ids = class_ids
         for class_id in class_ids:
             data = np.load(os.path.join(directory, '%s_%s.npz' % (class_id, set_name)), allow_pickle=True, encoding="latin1")
             self.images_original[class_id] = data['images']
@@ -263,69 +291,73 @@ class Pascal(object):
                 self.rotation_matrices[class_id] = np.concatenate(
                     (self.rotation_matrices[class_id], data['rotation_matrices']), axis=0)
                 self.voxels[class_id] = np.concatenate((self.voxels[class_id], data['voxels']), axis=0)
-            self.images_ref[class_id] = self.images_ref[class_id].transpose((0, 3, 1, 2))
+            # self.images_ref[class_id] = self.images_ref[class_id].transpose((0, 3, 1, 2))
             self.num_data[class_id] = self.images_ref[class_id].shape[0]
+            self.pos[class_id] = count
+            count += self.num_data[class_id]
+        # concatenate dicts
+        self.images_original = np.concatenate(list(self.images_original.values()), axis=0)
+        self.images_ref = np.concatenate(list(self.images_ref.values()), axis=0)
+        self.bounding_boxes = np.concatenate(list(self.bounding_boxes.values()), axis=0)
+        self.rotation_matrices = np.concatenate(list(self.rotation_matrices.values()), axis=0)
+        self.voxels = np.concatenate(list(self.voxels.values()), axis=0)
+        # # hard-assign each pose to its nearest equal-partitioning direction on sphere
+        # vertices, faces = nr.load_obj('sphere_42.obj')  # load a 42-equal-partitioning sphere mesh
+        # vertices = vertices.cpu().numpy()  # 42 x 3
+        # self.viewIDs = []
+        # for rotation_matrix in self.rotation_matrices:
+        #     y_axis = rotation_matrix[:, 1:2]
+        #     y_axis = -y_axis  # negative y-axis points upside of a areoplane
+        #     cosins = np.dot(vertices, y_axis)
+        #     viewID = np.argmax(cosins, axis=0)
+        #     self.viewIDs.append(int(viewID))
 
-    def get_random_batch(self, batch_size):
-        labels = np.zeros(batch_size, 'int32')
-        images_in = np.zeros((batch_size, 3, self.image_size, self.image_size), 'float32')
-        images_ref = np.zeros((batch_size, 4, self.image_size, self.image_size), 'float32')
-        rotation_matrices = np.zeros((batch_size, 3, 3), 'float32')
-        rotation_matrices_random = np.zeros((batch_size, 3, 3), 'float32')
-        voxels = np.zeros((batch_size, 32, 32, 32), 'float32')
-        for i in range(batch_size):
-            class_id = np.random.choice(self.class_ids)
-            object_num = np.random.choice(range(self.num_data[class_id]))
-            # object_num = 0
-            image_in = self.images_original[class_id][object_num]
-            image_ref = self.images_ref[class_id][object_num].astype('float32') / 255.
-            rotation = self.rotation_matrices[class_id][object_num]
-            bonding_box = self.bounding_boxes[class_id][object_num]
-            images_in[i], images_ref[i], rotation_matrices[i] = crop_image(
-                image_in,
-                image_ref,
-                rotation,
-                bonding_box,
-                padding=0.15,
-                jitter=0.15,
-                flip=False,
-            )
-            labels[i] = self.class_ids.index(class_id)
-            voxels[i] = self.voxels[class_id][object_num]
+        # hard-assign pose according to euler angles
+        self.viewIDs = []
+        steps = [30]*3
+        for rotation_matrix in self.rotation_matrices:
+            r = sciR.from_dcm(rotation_matrix)
+            eulers = r.as_euler('yzx', degrees=True)
+            bin = eulers2bin(eulers, steps)
+            self.viewIDs.append(bin)
+        validViews = set(self.viewIDs)
+        validViews = sorted(list(validViews))
+        self.viewBins = len(validViews)
+        self.viewIDs = [validViews.index(viewID) for viewID in self.viewIDs]  # re-generate valid viewIDs (delete empty bins)
 
-        rms = [rotation_matrices[np.nonzero(labels == i)[0]] for i in range(3)]
-        counts = np.zeros(3, 'int32')
-        for i in range(batch_size):
-            label = labels[i]
-            rotation_matrices_random[i] = rms[label][(counts[label] + 1) % len(rms[label])].copy()
-            counts[label] += 1
+        # df = pd.DataFrame({'viewIDs': self.viewIDs})
+        # df.hist(bins=[i for i in range(len(validViews)+1)])
+        # plt.show()
 
-        # delete masked pixels
-        images_ref[:, :3, :, :] *= images_ref[:, 3][:, None, :, :]
+    def __len__(self):
+        return sum(list(self.num_data.values()))
 
-        return images_in, images_ref, rotation_matrices, rotation_matrices_random, labels, voxels
+    def __getitem__(self, item):
+        if self.set_name == 'train':
+            flip = True
+            jitter = 0.15
+        elif self.set_name == 'val':
+            flip = False
+            jitter = 0
+        image_in = self.images_original[item]
+        image_ref = self.images_ref[item]
+        rotation = self.rotation_matrices[item]
+        bonding_box = self.bounding_boxes[item]
+        image_in, image_ref, rotation_matrice = crop_image(
+            image_in,
+            image_ref,
+            rotation,
+            bonding_box,
+            padding=0.15,
+            jitter=jitter,
+            flip=flip,
+            image_size=self.image_size
+        )
+        voxel = self.voxels[item]
+        # # delete masked pixels
+        # image_ref[:3, :, :] *= image_ref[3][None, :, :]
+        image_in = np.concatenate((image_in, image_ref[3:4]), axis=0)
+        viewID = self.viewIDs[item]
 
-    def get_all_batches_for_evaluation(self, batch_size, class_id, num_views=None):
-        num_objects = self.num_data[class_id]
-        for batch_num in range((num_objects - 1) / batch_size + 1):
-            batch_size2 = min(num_objects - batch_num * batch_size, batch_size)
-            images_in = np.zeros((batch_size2, 3, self.image_size, self.image_size), 'float32')
-            voxels = np.zeros((batch_size2, 32, 32, 32), 'float32')
-            for i in range(batch_size2):
-                object_num = batch_num * batch_size + i
-                image_in = self.images_original[class_id][object_num]
-                image_ref = self.images_ref[class_id][object_num].astype('float32') / 255.
-                rotation = self.rotation_matrices[class_id][object_num]
-                bounding_box = self.bounding_boxes[class_id][object_num]
-                images_in[i], _, _ = crop_image(
-                    image_in,
-                    image_ref,
-                    rotation,
-                    bounding_box,
-                    padding=0.15,
-                    jitter=0,
-                    flip=False,
-                )
-                voxels[i] = self.voxels[class_id][object_num].astype('float32')
-
-            yield images_in, voxels
+        return torch.from_numpy(image_in), torch.from_numpy(rotation_matrice), \
+               torch.tensor(viewID), torch.from_numpy(voxel.astype(np.int32))

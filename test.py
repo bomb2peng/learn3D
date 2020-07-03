@@ -133,62 +133,63 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 from data_loader import Pascal
 import torch
 import neural_renderer as nr
-import os
-from torchvision.utils import  save_image
+import models as M
 
+device = torch.device('cuda:0')
 dataDir = "/hd1/pengbo/Pascal3D_Kato/"
-class_ids = ['aeroplane']
-dataset_train = Pascal(dataDir, class_ids, 'val')
-images_in, images_ref, rotation_matrices, \
-rotation_matrices_random, labels, voxels = dataset_train.get_random_batch(1)
-images_in = np.transpose(images_in, [0, 2, 3, 1])
-images_ref = np.transpose(images_ref, [0, 2, 3, 1])
-print(images_in.shape)
-print(images_ref.shape)
-print(rotation_matrices.shape)
-print(labels.shape)
+class_ids = ['02691156']
+load_E = "/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN-Pascal3D/ckpt3D_02691156/last-E.ckpt"
+load_G = "/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN-Pascal3D/ckpt3D_02691156/last-G.ckpt"
+latent_dim = 512
+batch_size = 1
 
-cuda0 = torch.device('cuda:0')
-objDir = "/hd2/pengbo/mesh_reconstruction/models/reconstruction/examples_AEfeatGAN529/02691156_0_out.obj"
-saveDir = "/hd2/pengbo/mesh_reconstruction/models/reconstruction/temp/"
-texture_size = 2
-R_rot = torch.from_numpy(rotation_matrices[0:1, :]).to(cuda0)
-# R = torch.tensor([[[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]], device=cuda0)
-t = torch.tensor([[[0., 0., 1.+1e-5]]], device=cuda0)
+def tensor2img(tensor):
+    img = tensor.cpu().numpy()
+    img = img.transpose((1,2,0))
+    return img
 
-renderer = nr.Renderer(camera_mode='None', image_size=128)
+dataset = Pascal(dataDir, class_ids, 'val')
+data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+encoder = M.Encoder(3, dim_out=latent_dim)
+mesh_generator = M.Mesh_Generator(latent_dim, 'sphere_642.obj')
+mesh_generator.to(device)
+encoder.to(device)
+encoder.load_state_dict(torch.load(load_E))
+mesh_generator.load_state_dict(torch.load(load_G))
 
-vertices, faces = nr.load_obj(objDir)
-vertices *= 1
-vertices = torch.Tensor.repeat(vertices[None,:,:], (1,1,1))
-print(vertices.shape)
-R_obj = torch.tensor([[[0., 0., 1.], [0., -1., 0.], [1., 0., 0.]]], device=cuda0)
-vertices = torch.matmul(vertices, R_obj.transpose(2, 1))
-R_compen = torch.tensor([[[-1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]], device=cuda0)
-R = torch.matmul(R_compen, R_rot)
-vertices = torch.matmul(vertices, R.transpose(2, 1)) + t
-faces = torch.Tensor.repeat(faces[None,:,:], (1,1,1))
-textures = torch.ones(faces.shape[0], faces.shape[1], texture_size, texture_size, texture_size, \
-                      3, dtype=torch.float32).cuda()
+with torch.no_grad():
+    images_in, rotation_matrices, _, voxels = next(iter(data_loader))
+    print(images_in.shape)
+    print(rotation_matrices.shape)
+    images_in = images_in.to(device)
+    rotation_matrices = rotation_matrices.to(device)
 
-images_rgb = renderer(vertices, faces, textures, mode='rgb')
-images_silh = renderer(vertices, faces, textures, mode='silhouettes')
-images_silh = images_silh[:, None, :, :]
-save_image(images_rgb, os.path.join(saveDir, 'rendering_rgb.png'), nrow=4)
-save_image(images_silh, os.path.join(saveDir, 'rendering_silh.png'), nrow=4)
+    input_imgs = images_in[:, 0:3, :, :]
+    z = encoder(input_imgs)
+    vertices, faces = mesh_generator(z)
+    faces_v = nr.vertices_to_faces(vertices, faces).data
+    # faces_v = faces_v * 1. * (32. - 1) / 32. + 0.5  # normalization
+    faces_v = (faces_v + 1.0) * 0.5  # normalization
+    voxels_predicted = voxelization.voxelize(faces_v, 32, False)
+    voxels_predicted = voxels_predicted.transpose(2, 3).flip([1, 2, 3])
+    ious = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
+                torch.Tensor.float(0 < (voxels + voxels_predicted.cpu())).sum((1, 2, 3))
+    print('mean iou is : %f' % (ious.sum().item()/batch_size))
+
+    mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset='Pascal3D', mode='rgb').to(device)
+    gen_imgs = mesh_renderer(rotation_matrices)
 
 plt.figure(0)
-plt.imshow(images_in[0,:,:,:])
+plt.imshow(tensor2img(input_imgs[0,:,:,:]))
+plt.title('input image')
+
 plt.figure(1)
-plt.imshow(images_ref[0, :,:,0:3])
-print('R:')
-print(rotation_matrices[0,:])
+plt.imshow(tensor2img(gen_imgs[0,:,:,:]))
+plt.title('gen image')
 
 fig = plt.figure(2)
 ax = fig.gca(projection='3d')
-voxel = voxels[0,:,:,:]
-# voxel = voxel[::-1, ::-1, ::-1]
-# voxel = voxel.transpose((0,2,1))
+voxel = voxels[0,:,:,:].numpy()
 ax.voxels(voxel, facecolors='red', edgecolor='k')
 ax.set_xlabel('x')
 ax.set_ylabel('y')
@@ -197,5 +198,19 @@ plt.plot([16,32], [16,16], [16,16], 'r')
 plt.plot([16,16], [16,32], [16,16], 'g')
 plt.plot([16,16], [16,16], [16,32], 'b')
 ax.view_init(50, -50)
+plt.title('gt voxel')
+
+fig = plt.figure(3)
+ax = fig.gca(projection='3d')
+voxel = voxels_predicted[0, :, :, :].cpu().numpy()
+ax.voxels(voxel, facecolors='red', edgecolor='k')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('z')
+plt.plot([16, 32], [16, 16], [16, 16], 'r')
+plt.plot([16, 16], [16, 32], [16, 16], 'g')
+plt.plot([16, 16], [16, 16], [16, 32], 'b')
+ax.view_init(50, -50)
+plt.title('pred voxel')
 
 plt.show()
