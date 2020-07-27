@@ -128,89 +128,101 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 # plt.colorbar(sc)
 # plt.show()
 
-# Test Pascal VOC dataset from Kato's view_prior_learning (https://github.com/hiroharu-kato/view_prior_learning/blob/6f1afa8811180a47334cddc62112d7cfb8b2ceca/mesh_reconstruction/dataset_pascal.py)
-# This is for testing the coordinate system conversion
-from data_loader import Pascal
-import torch
-import neural_renderer as nr
-import models as M
+# # Test Pascal VOC dataset from Kato's view_prior_learning (https://github.com/hiroharu-kato/view_prior_learning/blob/6f1afa8811180a47334cddc62112d7cfb8b2ceca/mesh_reconstruction/dataset_pascal.py)
+# # This is for testing the coordinate system conversion
+# from data_loader import Pascal
+# import torch
+# import neural_renderer as nr
+# import models as M
+#
+# device = torch.device('cuda:0')
+# dataDir = "/hd1/pengbo/Pascal3D_Kato/"
+# class_ids = ['02691156']
+# load_E = "/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN-Pascal3D/ckpt3D_02691156/last-E.ckpt"
+# load_G = "/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN-Pascal3D/ckpt3D_02691156/last-G.ckpt"
+# latent_dim = 512
+# batch_size = 1
+#
+# def tensor2img(tensor):
+#     img = tensor.cpu().numpy()
+#     img = img.transpose((1,2,0))
+#     return img
+#
+# dataset = Pascal(dataDir, class_ids, 'val')
+# data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+# encoder = M.Encoder(3, dim_out=latent_dim)
+# mesh_generator = M.Mesh_Generator(latent_dim, 'sphere_642.obj')
+# mesh_generator.to(device)
+# encoder.to(device)
+# encoder.load_state_dict(torch.load(load_E))
+# mesh_generator.load_state_dict(torch.load(load_G))
+#
+# with torch.no_grad():
+#     images_in, rotation_matrices, _, voxels = next(iter(data_loader))
+#     print(images_in.shape)
+#     print(rotation_matrices.shape)
+#     images_in = images_in.to(device)
+#     rotation_matrices = rotation_matrices.to(device)
+#
+#     input_imgs = images_in[:, 0:3, :, :]
+#     z = encoder(input_imgs)
+#     vertices, faces = mesh_generator(z)
+#     faces_v = nr.vertices_to_faces(vertices, faces).data
+#     # faces_v = faces_v * 1. * (32. - 1) / 32. + 0.5  # normalization
+#     faces_v = (faces_v + 1.0) * 0.5  # normalization
+#     voxels_predicted = voxelization.voxelize(faces_v, 32, False)
+#     voxels_predicted = voxels_predicted.transpose(2, 3).flip([1, 2, 3])
+#     ious = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
+#                 torch.Tensor.float(0 < (voxels + voxels_predicted.cpu())).sum((1, 2, 3))
+#     print('mean iou is : %f' % (ious.sum().item()/batch_size))
+#
+#     mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset='Pascal3D', mode='rgb').to(device)
+#     gen_imgs = mesh_renderer(rotation_matrices)
+#
+# plt.figure(0)
+# plt.imshow(tensor2img(input_imgs[0,:,:,:]))
+# plt.title('input image')
+#
+# plt.figure(1)
+# plt.imshow(tensor2img(gen_imgs[0,:,:,:]))
+# plt.title('gen image')
+#
+# fig = plt.figure(2)
+# ax = fig.gca(projection='3d')
+# voxel = voxels[0,:,:,:].numpy()
+# ax.voxels(voxel, facecolors='red', edgecolor='k')
+# ax.set_xlabel('x')
+# ax.set_ylabel('y')
+# ax.set_zlabel('z')
+# plt.plot([16,32], [16,16], [16,16], 'r')
+# plt.plot([16,16], [16,32], [16,16], 'g')
+# plt.plot([16,16], [16,16], [16,32], 'b')
+# ax.view_init(50, -50)
+# plt.title('gt voxel')
+#
+# fig = plt.figure(3)
+# ax = fig.gca(projection='3d')
+# voxel = voxels_predicted[0, :, :, :].cpu().numpy()
+# ax.voxels(voxel, facecolors='red', edgecolor='k')
+# ax.set_xlabel('x')
+# ax.set_ylabel('y')
+# ax.set_zlabel('z')
+# plt.plot([16, 32], [16, 16], [16, 16], 'r')
+# plt.plot([16, 16], [16, 32], [16, 16], 'g')
+# plt.plot([16, 16], [16, 16], [16, 32], 'b')
+# ax.view_init(50, -50)
+# plt.title('pred voxel')
+#
+# plt.show()
 
-device = torch.device('cuda:0')
-dataDir = "/hd1/pengbo/Pascal3D_Kato/"
-class_ids = ['02691156']
-load_E = "/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN-Pascal3D/ckpt3D_02691156/last-E.ckpt"
-load_G = "/hd2/pengbo/mesh_reconstruction/models/AEfeatGAN-Pascal3D/ckpt3D_02691156/last-G.ckpt"
-latent_dim = 512
-batch_size = 1
-
-def tensor2img(tensor):
-    img = tensor.cpu().numpy()
-    img = img.transpose((1,2,0))
-    return img
-
-dataset = Pascal(dataDir, class_ids, 'val')
-data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
-encoder = M.Encoder(3, dim_out=latent_dim)
-mesh_generator = M.Mesh_Generator(latent_dim, 'sphere_642.obj')
-mesh_generator.to(device)
-encoder.to(device)
-encoder.load_state_dict(torch.load(load_E))
-mesh_generator.load_state_dict(torch.load(load_G))
-
-with torch.no_grad():
-    images_in, rotation_matrices, _, voxels = next(iter(data_loader))
-    print(images_in.shape)
-    print(rotation_matrices.shape)
-    images_in = images_in.to(device)
-    rotation_matrices = rotation_matrices.to(device)
-
-    input_imgs = images_in[:, 0:3, :, :]
-    z = encoder(input_imgs)
-    vertices, faces = mesh_generator(z)
-    faces_v = nr.vertices_to_faces(vertices, faces).data
-    # faces_v = faces_v * 1. * (32. - 1) / 32. + 0.5  # normalization
-    faces_v = (faces_v + 1.0) * 0.5  # normalization
-    voxels_predicted = voxelization.voxelize(faces_v, 32, False)
-    voxels_predicted = voxels_predicted.transpose(2, 3).flip([1, 2, 3])
-    ious = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
-                torch.Tensor.float(0 < (voxels + voxels_predicted.cpu())).sum((1, 2, 3))
-    print('mean iou is : %f' % (ious.sum().item()/batch_size))
-
-    mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset='Pascal3D', mode='rgb').to(device)
-    gen_imgs = mesh_renderer(rotation_matrices)
-
-plt.figure(0)
-plt.imshow(tensor2img(input_imgs[0,:,:,:]))
-plt.title('input image')
-
-plt.figure(1)
-plt.imshow(tensor2img(gen_imgs[0,:,:,:]))
-plt.title('gen image')
-
-fig = plt.figure(2)
+# Test PrGAN voxel VS. cvpr18's voxel coordinates
+voxel_dir_prgan = "/hd2/pengbo/allProjects/PrGAN/results/PrGAN02691156/volume00000.npy"
+voxel_prgan = np.load(voxel_dir_prgan)
+print(voxel_prgan.shape)
+fig = plt.figure(1)
 ax = fig.gca(projection='3d')
-voxel = voxels[0,:,:,:].numpy()
-ax.voxels(voxel, facecolors='red', edgecolor='k')
+ax.voxels(voxel_prgan, facecolors='red', edgecolor='k')
 ax.set_xlabel('x')
 ax.set_ylabel('y')
 ax.set_zlabel('z')
-plt.plot([16,32], [16,16], [16,16], 'r')
-plt.plot([16,16], [16,32], [16,16], 'g')
-plt.plot([16,16], [16,16], [16,32], 'b')
-ax.view_init(50, -50)
-plt.title('gt voxel')
-
-fig = plt.figure(3)
-ax = fig.gca(projection='3d')
-voxel = voxels_predicted[0, :, :, :].cpu().numpy()
-ax.voxels(voxel, facecolors='red', edgecolor='k')
-ax.set_xlabel('x')
-ax.set_ylabel('y')
-ax.set_zlabel('z')
-plt.plot([16, 32], [16, 16], [16, 16], 'r')
-plt.plot([16, 16], [16, 32], [16, 16], 'g')
-plt.plot([16, 16], [16, 16], [16, 32], 'b')
-ax.view_init(50, -50)
-plt.title('pred voxel')
-
 plt.show()

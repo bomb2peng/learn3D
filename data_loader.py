@@ -163,6 +163,9 @@ class ShapeNet_LSM(data.Dataset):
         self.pos = {}
         self.wAzimuth=wAzimuth
         self.wElevation=wElevation
+        nAzimuth = math.ceil(360 / wAzimuth)
+        nElevation = math.ceil(60 / wElevation)
+        self.viewBins = nAzimuth*nElevation
         count = 0
         for class_id in loop:
             obj_ids = self.splits[class_id][set_name]
@@ -314,7 +317,7 @@ class Pascal(object):
 
         # hard-assign pose according to euler angles
         self.viewIDs = []
-        steps = [30]*3
+        steps = [45]*3
         for rotation_matrix in self.rotation_matrices:
             r = sciR.from_dcm(rotation_matrix)
             eulers = r.as_euler('yzx', degrees=True)

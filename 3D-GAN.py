@@ -21,6 +21,7 @@ import re
 import skimage.transform as skT
 import pandas as pd
 import math
+import torchvision.transforms as transforms
 
 def str2bool(v):
     return v.lower() in ('true')
@@ -116,19 +117,31 @@ def eval_IoU(encoder, mesh_generator, dataset_val, class_ids = opt.class_ids.spl
                 real_imgs = Variable(imgs.to(device))
                 if opt.dataset == 'Pascal3D':
                     input_imgs = real_imgs[:, 0:3, :, :]
+                    if opt.img_size == 224:  # use resnet-18 as encoder and normalize input accordingly
+                        mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
+                        std = torch.tensor([0.229, 0.224, 0.225]).to(device)
+                        mean = mean.repeat(input_imgs.shape[0], 224, 224, 1).transpose(1, 3)
+                        std = std.repeat(input_imgs.shape[0], 224, 224, 1).transpose(1, 3)
+                        # print(input_imgs.shape)
+                        # print(mean.shape)
+                        input_imgs = (input_imgs - mean) / std
                 else:
                     input_imgs = real_imgs
                 z = encoder(input_imgs)
                 vertices, faces = mesh_generator(z)
                 faces = nr.vertices_to_faces(vertices, faces).data
-                # faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
-                faces = (faces + 1.0) * 0.5  # normalization
-                voxels_predicted = voxelization.voxelize(faces, 32, False)
+
                 if opt.dataset == 'CVPR18':
+                    faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
+                    voxels_predicted = voxelization.voxelize(faces, 32, False)
                     voxels_predicted = voxels_predicted.transpose(1, 2).flip([3])
                 elif opt.dataset == 'NIPS17':
+                    faces = faces * 1. * (32. - 1) / 32. + 0.5  # normalization
+                    voxels_predicted = voxelization.voxelize(faces, 32, False)
                     voxels_predicted = voxels_predicted.transpose(1, 3).flip([1])
                 elif opt.dataset == 'Pascal3D':
+                    faces = (faces + 1.0) * 0.5  # normalization
+                    voxels_predicted = voxelization.voxelize(faces, 32, False)
                     voxels_predicted = voxels_predicted.transpose(2, 3).flip([1,2,3])
 
                 iou_batch = torch.Tensor.float(voxels * voxels_predicted.cpu()).sum((1, 2, 3)) / \
@@ -211,7 +224,7 @@ if opt.mode == 'train':
         # Configure data loader for shapeNet dataset in Kar's NIPS17
         dataset_train = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
                                                  opt.class_ids.split(','), 'train', opt.img_size, opt.trainViews,
-                                                 opt.wAzimuth, opt.wElevation)
+                                                 opt.wAzimuth, opt.wElevation)  # following Kato's CVPR19 paper, use only one view for training, all views for testing.
         dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False, num_workers=4)
         dataset_val = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
                                                opt.class_ids.split(','), 'val', opt.img_size, nViews,
@@ -219,7 +232,7 @@ if opt.mode == 'train':
     elif opt.dataset == 'Pascal3D':
         # Configure data loader for Pascal 3D+ dataset from Kato's CVPR19
         dataset_train = data_loader.Pascal(opt.data_dir, opt.class_ids.split(','), 'train', opt.img_size)
-        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False)
+        dataloader = data.DataLoader(dataset_train, batch_size=opt.batch_size, shuffle=True, drop_last=False, num_workers=4)
         dataset_val = data_loader.Pascal(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
         viewBins = dataset_train.viewBins  # assign nViews according to pose distribution in training dataset
 
@@ -227,10 +240,19 @@ if opt.mode == 'train':
 
     # Initialize encoder and decoder and discriminator
     if opt.dataset == 'Pascal3D':
-        encoder = M.Encoder(3, dim_out=opt.latent_dim)
+        if opt.img_size == 64:
+            encoder = M.Encoder(3, dim_out=opt.latent_dim)
+        elif opt.img_size == 128:
+            encoder = M.Encoder(3, dim_out=opt.latent_dim, nConvs=4)
+        elif opt.img_size == 224:  # use resnet-18 as encoder
+            encoder = M.ResNet_Encoder()
     else:
         encoder = M.Encoder(4, dim_out=opt.latent_dim)
-    mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
+
+    if opt.dataset == 'Pascal3D' and opt.img_size == 224:
+        mesh_generator = M.Mesh_Generator_symmetry(opt.latent_dim, opt.obj_dir)
+    else:
+        mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     discriminator = M.feat_Discriminator(opt.latent_dim, viewBins)
 
     if os.path.isfile('smoothness_params_642.npy'):
@@ -243,6 +265,8 @@ if opt.mode == 'train':
         encoder.cuda(opt.device_id)
         discriminator.cuda(opt.device_id)
 
+    # print('check is model on cuda')
+    # print(next(encoder.parameters()).is_cuda)
     # Initialize weights
     if opt.load_G is None:
         pass
@@ -280,20 +304,36 @@ if opt.mode == 'train':
             # -----------------
             if opt.dataset == 'Pascal3D':
                 input_imgs = real_imgs[:, 0:3, :, :]
+                if opt.img_size == 224:  # use resnet-18 as encoder and normalize input accordingly
+                    mean=torch.tensor([0.485, 0.456, 0.406]).to(device)
+                    std=torch.tensor([0.229, 0.224, 0.225]).to(device)
+                    mean = mean.repeat(input_imgs.shape[0], 224, 224, 1).transpose(1,3)
+                    std = std.repeat(input_imgs.shape[0], 224, 224, 1).transpose(1,3)
+                    # print(input_imgs.shape)
+                    # print(mean.shape)
+                    input_imgs = (input_imgs - mean)/std
             else:
                 input_imgs = real_imgs
             z = encoder(input_imgs)
             # Generate a batch of images
             vertices, faces = mesh_generator(z)
-            mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset=opt.dataset).cuda(opt.device_id)
+            if opt.img_size == 224:   # try using smaller size masks as guidence
+                mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset=opt.dataset, img_size=64).cuda(opt.device_id)
+            else:
+                mesh_renderer = M.Mesh_Renderer(vertices, faces, dataset=opt.dataset, img_size=opt.img_size).cuda(opt.device_id)
 
             gen_imgs = mesh_renderer(viewpoints)
             gt_imgs = real_imgs[:,3,:,:]
             gt_imgs = gt_imgs.reshape((gt_imgs.shape[0],1,opt.img_size,opt.img_size))
+            if opt.img_size == 224:  # try using smaller size masks as guidence
+                gt_imgs = torch.nn.functional.interpolate(gt_imgs, (64, 64))
 
-            smth_loss = L.smoothness_loss(vertices, smoothness_params)
-            iou_loss = L.iou_loss(gt_imgs, gen_imgs)
             Gprior_loss = torch.sum(z ** 2) / z.shape[0]
+            smth_loss = L.smoothness_loss(vertices, smoothness_params)
+            # smth_loss = torch.zeros_like(Gprior_loss)
+            iou_loss = L.iou_loss(gt_imgs, gen_imgs)
+            # iou_loss = torch.zeros_like(smth_loss)
+            # smth_loss = L.inflation_loss(vertices, faces)
 
             if batches_done % opt.G_every != 0:        # Train Discriminator
                 z_detach = z.detach()
@@ -583,10 +623,13 @@ if opt.mode == 'trainCVPR19':
 elif opt.mode == 'evaluation':
     # evaluate reconstruction accuracy using voxel IoU
     f_log = open(os.path.join(opt.ckpt_dir, 'test_log.txt'), 'a+')
-    f_log.write(str(datetime.datetime.now()))
+    f_log.write(str(datetime.datetime.now())+'\n')
     print(opt.class_ids + ', mean')
-    f_log.write(opt.class_ids + ', mean')
-    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    f_log.write(opt.class_ids + ', mean'+'\n')
+    if opt.dataset == 'Pascal3D':
+        encoder = M.Encoder(3, dim_out=opt.latent_dim)
+    else:
+        encoder = M.Encoder(4, dim_out=opt.latent_dim)
     mesh_generator = M.Mesh_Generator(opt.latent_dim, opt.obj_dir)
     if cuda:
         mesh_generator.cuda(opt.device_id)
@@ -606,11 +649,14 @@ elif opt.mode == 'evaluation':
         elif opt.dataset == 'NIPS17':
             dataset_test = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
                                                [class_id], 'test', opt.img_size, nViews)
+        elif opt.dataset == 'Pascal3D':
+            dataset_test = data_loader.Pascal(opt.data_dir,
+                                               [class_id], 'val', opt.img_size)
 
         ious.append(eval_IoU(encoder, mesh_generator, dataset_test, [class_id]))
     ious.append(np.mean(ious))
     print(str(ious))
-    f_log.write(str(ious))
+    f_log.write(str(ious)+'\n')
     f_log.close()
 
 elif opt.mode == 'reconstruct':
@@ -651,10 +697,61 @@ elif opt.mode == 'reconstruct':
     nr.save_obj(os.path.join(opt.sample_dir, fn+'_out.obj'), vertices[0, :, :], faces[0, :, :])
     print('Saved reconstruction results of %s to %s...' % (fn, opt.sample_dir))
 
+elif opt.mode == 'reconstruct_Pascal':
+    # reconstruct sample images and save models for visulization
+    os.makedirs(opt.sample_dir, exist_ok=True)
+    encoder = M.ResNet_Encoder()
+    mesh_generator = M.Mesh_Generator_symmetry(opt.latent_dim, opt.obj_dir)
+
+    if cuda:
+        mesh_generator.cuda(opt.device_id)
+        encoder.cuda(opt.device_id)
+    # Initialize weights
+    mesh_generator.load_state_dict(torch.load(opt.load_G))
+    encoder.load_state_dict(torch.load(opt.load_E))
+    mesh_generator.eval()
+    encoder.eval()
+
+    dataset_val = data_loader.Pascal(opt.data_dir, opt.class_ids.split(','), 'val', opt.img_size)
+    dataloader = data.DataLoader(dataset_val, batch_size=8, shuffle=False, drop_last=False, num_workers=1)
+    sampleBatch = 0
+    for iBatch, (imgs, viewpoints, viewids_real, _) in enumerate(dataloader):
+        if iBatch == sampleBatch:
+            break
+    # Configure input
+    real_imgs = Variable(imgs.to(device))
+    viewpoints = Variable(viewpoints.to(device))
+    input_imgs = real_imgs[:, 0:3, :, :]
+    mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
+    std = torch.tensor([0.229, 0.224, 0.225]).to(device)
+    mean = mean.repeat(input_imgs.shape[0], 224, 224, 1).transpose(1, 3)
+    std = std.repeat(input_imgs.shape[0], 224, 224, 1).transpose(1, 3)
+    # print(input_imgs.shape)
+    # print(mean.shape)
+    input_imgs = (input_imgs - mean) / std
+
+    z = encoder(input_imgs)
+    # Generate a batch of images
+    vertices, faces = mesh_generator(z)
+
+    objID = opt.class_ids.split(',')[0]
+    save_image(imgs.data[:, 0:3, :, :], os.path.join(opt.sample_dir, 'real_samples_%s.png' % objID), nrow=8,
+               normalize=True)
+    for i in range(imgs.shape[0]):
+        nr.save_obj(os.path.join(opt.sample_dir, 'out_%s_baseline_%d.obj' % (objID, i)), vertices[i, :, :], faces[i, :, :])
+
 elif opt.mode == 't_SNE':
     # t_SNE visualization of learned shape embedings
     # Initialize encoder and decoder
-    encoder = M.Encoder(4, dim_out=opt.latent_dim)
+    if opt.dataset == 'Pascal3D':
+        if opt.img_size == 64:
+            encoder = M.Encoder(3, dim_out=opt.latent_dim)
+        elif opt.img_size == 128:
+            encoder = M.Encoder(3, dim_out=opt.latent_dim, nConvs=4)
+        elif opt.img_size == 224:  # use resnet-18 as encoder
+            encoder = M.ResNet_Encoder()
+    else:
+        encoder = M.Encoder(4, dim_out=opt.latent_dim)
     if cuda:
         encoder.cuda(opt.device_id)
 
@@ -668,6 +765,9 @@ elif opt.mode == 't_SNE':
     elif opt.dataset == 'NIPS17':
         dataset_val = data_loader.ShapeNet_LSM(opt.data_dir, opt.split_file,
                                                opt.class_ids.split(','), 'test', opt.img_size, nViews)
+    elif opt.dataset == 'Pascal3D':
+        dataset_val = data_loader.Pascal(opt.data_dir,
+                                         opt.class_ids.split(','), 'train', opt.img_size)
     dataloader = data.DataLoader(dataset_val, batch_size=opt.batch_size, shuffle=True, drop_last=False)
 
     # features = np.zeros((len(dataset_val), opt.latent_dim))
@@ -684,7 +784,11 @@ elif opt.mode == 't_SNE':
                 break
             # Configure input
             real_imgs = Variable(imgs.to(device))
-            z = encoder(real_imgs)
+            if opt.dataset == 'Pascal3D':
+                input_imgs = real_imgs[:, 0:3, :, :]
+            else:
+                input_imgs = real_imgs
+            z = encoder(input_imgs)
 
             z_cpu = torch.squeeze(z.cpu())
             features[(i * opt.batch_size):min((i + 1) * opt.batch_size, len(dataset_val)),:] = \
