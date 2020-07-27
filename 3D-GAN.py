@@ -330,10 +330,8 @@ if opt.mode == 'train':
 
             Gprior_loss = torch.sum(z ** 2) / z.shape[0]
             smth_loss = L.smoothness_loss(vertices, smoothness_params)
-            # smth_loss = torch.zeros_like(Gprior_loss)
             iou_loss = L.iou_loss(gt_imgs, gen_imgs)
-            # iou_loss = torch.zeros_like(smth_loss)
-            # smth_loss = L.inflation_loss(vertices, faces)
+            # smth_loss = L.inflation_loss(vertices, faces)  # Kato's inflation loss not working well in my implementation.
 
             if batches_done % opt.G_every != 0:        # Train Discriminator
                 z_detach = z.detach()
@@ -698,7 +696,7 @@ elif opt.mode == 'reconstruct':
     print('Saved reconstruction results of %s to %s...' % (fn, opt.sample_dir))
 
 elif opt.mode == 'reconstruct_Pascal':
-    # reconstruct sample images and save models for visulization
+    # reconstruct sample images in Pascal val dataset and save models for visulization
     os.makedirs(opt.sample_dir, exist_ok=True)
     encoder = M.ResNet_Encoder()
     mesh_generator = M.Mesh_Generator_symmetry(opt.latent_dim, opt.obj_dir)
