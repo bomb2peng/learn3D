@@ -68,6 +68,34 @@ def smoothness_loss(vertices, parameters, eps=1e-6):
     cos = torch.sum(cb1 * cb2, dim=-1) / (cb1l1 * cb2l1 + eps)
 
     loss = torch.sum((cos + 1)**2) / batch_size
+    # loss = torch.sum(torch.abs(cos + 1)) / batch_size
+    return loss
+
+
+def inflation_loss(vertices, faces, eps=1e-5):
+    faces = torch.Tensor.long(faces[0])
+    assert vertices.ndimension() == 3
+    assert faces.ndimension() == 2
+
+    v0 = vertices[:, faces[:, 0], :]
+    v1 = vertices[:, faces[:, 1], :]
+    v2 = vertices[:, faces[:, 2], :]
+    batch_size, num_faces = v0.shape[:2]
+    v0 = torch.reshape(v0, (batch_size * num_faces, 3))
+    v1 = torch.reshape(v1, (batch_size * num_faces, 3))
+    v2 = torch.reshape(v2, (batch_size * num_faces, 3))
+    norms = torch.cross(v1 - v0, v2 - v0)  # [bs * nf, 3]
+    norms_norm = torch.norm(norms, dim=1, keepdim=True)
+    norms_norm = norms_norm.repeat(1, 3)
+    norms = norms/norms_norm
+    v0_t = (v0 + norms).detach()
+    v1_t = (v1 + norms).detach()
+    v2_t = (v2 + norms).detach()
+    loss_v0 = torch.sum(torch.sqrt(torch.sum(torch.pow(v0_t - v0, 2), 1) + eps))
+    loss_v1 = torch.sum(torch.sqrt(torch.sum(torch.pow(v1_t - v1, 2), 1) + eps))
+    loss_v2 = torch.sum(torch.sqrt(torch.sum(torch.pow(v2_t - v2, 2), 1) + eps))
+    loss = loss_v0 + loss_v1 + loss_v2
+    loss /= batch_size
     return loss
 
 
