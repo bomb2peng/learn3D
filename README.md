@@ -1,5 +1,5 @@
 ## Learn3D Introduction
-This is the code repository for paper ["Learning Pose-invariant 3D Object Reconstruction from Single-view Images"](https://arxiv.org/abs/2004.01347)
+This is the code repository for paper ["Learning Pose-invariant 3D Object Reconstruction from Single-view Images"](https://arxiv.org/abs/2004.01347), published in Neurocomputing 2020.
 
 
 Learning to reconstruct 3D shapes using 2D images is an active research topic, with benefits of not requiring expensive 3D data. However, most work in this direction requires multi-view images for each object instance as training supervision, which oftentimes does not apply in practice. In this paper, we relax the common multi-view assumption and explore a more challenging yet more realistic setup of learning 3D shape from only single-view images. The major difficulty lies in insufficient constraints that can be provided by single view images, which leads to the problem of pose entanglement in learned shape space. As a result, reconstructed shapes vary along input pose and have poor accuracy. We address this problem by taking a novel domain adaptation perspective, and propose an effective adversarial domain confusion method to learn pose-disentangled compact shape space. Experiments on single-view reconstruction show effectiveness in solving pose entanglement, and the proposed method achieves on-par reconstruction accuracy with state-of-the-art with higher efficiency.
@@ -49,12 +49,14 @@ This code and its derived model is only for non-profit acdemic research purposes
 ## Citation
 If you find this code usful, please cite our paper as 
 
-@misc{peng2020learning,  
-    title={Learning Pose-invariant 3D Object Reconstruction from Single-view Images},  
-    author={Bo Peng and Wei Wang and Jing Dong and Tieniu Tan},  
-    year={2020},  
-    eprint={2004.01347},  
-    archivePrefix={arXiv},  
-    primaryClass={cs.CV}  
+@article{PENG2020,
+title = "Learning pose-invariant 3D object reconstruction from single-view images",
+journal = "Neurocomputing",
+year = "2020",
+issn = "0925-2312",
+doi = "https://doi.org/10.1016/j.neucom.2020.10.089",
+url = "http://www.sciencedirect.com/science/article/pii/S0925231220317021",
+author = "Bo Peng and Wei Wang and Jing Dong and Tieniu Tan",
+keywords = "Learning 3D shape, Single view supervision, Domain confusion, Adversarial learning"
 }
  
