@@ -49,14 +49,14 @@ This code and its derived model is only for non-profit acdemic research purposes
 ## Citation
 If you find this code usful, please cite our paper as 
 
-@article{PENG2020,
-title = "Learning pose-invariant 3D object reconstruction from single-view images",
-journal = "Neurocomputing",
-year = "2020",
-issn = "0925-2312",
-doi = "https://doi.org/10.1016/j.neucom.2020.10.089",
-url = "http://www.sciencedirect.com/science/article/pii/S0925231220317021",
-author = "Bo Peng and Wei Wang and Jing Dong and Tieniu Tan",
-keywords = "Learning 3D shape, Single view supervision, Domain confusion, Adversarial learning"
+@article{PENG2020,  
+title = "Learning pose-invariant 3D object reconstruction from single-view images",  
+journal = "Neurocomputing",  
+year = "2020",  
+issn = "0925-2312",  
+doi = "https://doi.org/10.1016/j.neucom.2020.10.089",  
+url = "http://www.sciencedirect.com/science/article/pii/S0925231220317021",  
+author = "Bo Peng and Wei Wang and Jing Dong and Tieniu Tan",  
+keywords = "Learning 3D shape, Single view supervision, Domain confusion, Adversarial learning"  
 }
  
